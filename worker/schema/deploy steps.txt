@@ -1,0 +1,84 @@
+Step 1 — Create the D1 database (dashboard)
+Cloudflare dashboard → Workers & Pages → D1 SQL Database → Create Database
+Name it gate-pass-db → Create
+Step 2 — Apply the schema (dashboard)
+Open the gate-pass-db database → Console tab
+On your computer, open worker/schema/schema.sql (from your GitHub repo or the zip) in a text editor, select all, copy
+Paste the whole thing into the Console query box → Execute
+You should see the tables created with no errors — check the Tables tab to confirm employees, gate_passes, users, etc. all appear
+Step 3 — Generate your admin password hash (no Node needed)
+
+Since we're skipping generate-admin-hash.js, do this in your browser instead:
+
+Open any webpage, press F12 (or right-click → Inspect) to open DevTools, go to the Console tab
+Paste this whole block, replacing the password, then press Enter:
+js
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), { name: "PBKDF2" }, false, ["deriveBits"]);
+  const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, keyMaterial, 256);
+  const toHex = (buf) => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+  return `100000$${toHex(salt)}$${toHex(derived)}`;
+}
+hashPassword("YourStrongPassword").then(console.log);
+It prints something like 100000$a1b2...$c3d4... — copy that entire string
+Step 4 — Insert the admin user (D1 Console)
+
+Back in the D1 Console tab, run (pasting your copied hash):
+
+sql
+INSERT INTO users (username, password_hash, role) VALUES ('admin', '100000$a1b2...$c3d4...', 'SUPER_ADMIN');
+Step 5 — Create the Worker (dashboard code editor)
+Workers & Pages → Create → Workers → Create Worker
+Give it a name, e.g. gate-pass-api → Deploy (this deploys a placeholder — you'll replace the code next)
+Click Edit code to open the online editor
+You'll see a file panel on the left with one default file. You need it to contain all 9 worker files. For each file in your repo's worker/src/ folder (index.js, auth.js, audit.js, employees.js, locations.js, gatepasses.js, approvals.js, movements.js, users.js):
+Click + New file in the editor's file panel
+Name it exactly as it is in the repo (e.g. auth.js)
+Open the file on GitHub, copy its full contents, paste into the editor
+Make sure the file called index.js is set as the entry point (there's usually a small indicator or dropdown for this — if the editor defaulted to a different main filename, rename that one to index.js or set index.js as main in the file's context menu)
+Click Save and Deploy
+Step 6 — Bind the D1 database to the Worker
+Still on your Worker → Settings tab → Variables and Bindings (or Bindings)
+Add binding → type D1 Database
+Variable name: DB (must match exactly — this is what env.DB in the code refers to)
+D1 database: select gate-pass-db
+Save (this may trigger a redeploy automatically)
+Step 7 — Get your Worker's URL
+
+On the Worker's overview page, you'll see a URL like:
+
+https://gate-pass-api.<your-subdomain>.workers.dev
+
+Copy it.
+
+Step 8 — Create the Pages project (unchanged from before — already GUI-only)
+Workers & Pages → Create → Pages → Connect to Git → select your cantec-gate-pass repo
+Framework preset: None, Build command: (empty), Build output directory: /
+Save and Deploy
+Step 9 — Point the frontend at the Worker
+
+On GitHub (you can edit directly in the browser — click the pencil icon on index.html), add this line right before the js/api.js script tag:
+
+html
+<script>window.GATEPASS_API_BASE = "https://gate-pass-api.<your-subdomain>.workers.dev/api";</script>
+
+Commit directly to main — Pages redeploys automatically.
+
+Step 10 — Lock down CORS
+
+Back in the Worker's Edit code editor, open index.js, find:
+
+js
+"Access-Control-Allow-Origin": "*",
+
+change it to your Pages URL:
+
+js
+"Access-Control-Allow-Origin": "https://cantec-gate-pass.pages.dev",
+
+Save and Deploy again.
+
+Step 11 — Test
+
+Open your Pages URL, log in as admin with the password you hashed in Step 3.

@@ -1,0 +1,189 @@
+// worker/src/movements.js
+// Implements the validation chain from spec section 26 and the atomic
+// transaction pattern from section 18. D1 doesn't expose multi-statement
+// interactive transactions over HTTP the way a normal SQL client would,
+// but env.DB.batch() runs the statements atomically as a single unit,
+// which is what we use for the "create event + update state + audit" step.
+import { writeAudit } from "./audit.js";
+
+const EVENT_TYPES = [
+  "GATE_OUT", "LOCATION_IN", "LOCATION_OUT", "EXTERNAL_IN", "EXTERNAL_OUT", "RETURN", "GATE_IN", "CANCELLED",
+];
+
+// Maps an event type to the pass_member status it produces.
+function memberStatusFor(eventType) {
+  switch (eventType) {
+    case "GATE_OUT": return "OUTSIDE";
+    case "LOCATION_IN": return "AT_INTERNAL_LOCATION";
+    case "LOCATION_OUT": return "OUTSIDE";
+    case "EXTERNAL_IN": return "AT_EXTERNAL_LOCATION";
+    case "EXTERNAL_OUT": return "OUTSIDE";
+    case "RETURN": return "OUTSIDE"; // returned to a company location, but pass not yet closed until GATE_IN
+    case "GATE_IN": return "RETURNED";
+    case "CANCELLED": return "CANCELLED";
+    default: return null;
+  }
+}
+
+// body: { pass_id, employee_id, location_id, event_type, idempotency_key }
+export async function recordMovementEvent(env, user, body, request) {
+  const { pass_id, employee_id, location_id, event_type, idempotency_key } = body;
+
+  // --- Validation chain (spec section 26) ---
+  if (!pass_id || !employee_id || !event_type) {
+    const err = new Error("pass_id, employee_id and event_type are required");
+    err.status = 400;
+    throw err;
+  }
+  if (!EVENT_TYPES.includes(event_type)) {
+    const err = new Error(`event_type must be one of: ${EVENT_TYPES.join(", ")}`);
+    err.status = 400;
+    throw err;
+  }
+  if (!idempotency_key) {
+    const err = new Error("idempotency_key is required to make this request safely retryable");
+    err.status = 400;
+    throw err;
+  }
+
+  // SECURITY role: gate events only. EMPLOYEE role: location/external/return events for themselves.
+  const gateEvents = ["GATE_OUT", "GATE_IN"];
+  if (gateEvents.includes(event_type) && !["SECURITY", "ADMIN", "SUPER_ADMIN"].includes(user.role)) {
+    const err = new Error("Only Security can record gate in/out events");
+    err.status = 403;
+    throw err;
+  }
+  if (!gateEvents.includes(event_type) && user.role === "EMPLOYEE" && user.employeeId !== employee_id) {
+    const err = new Error("Employees can only record their own movement events");
+    err.status = 403;
+    throw err;
+  }
+
+  const pass = await env.DB.prepare(`SELECT * FROM gate_passes WHERE pass_id = ?`).bind(pass_id).first();
+  if (!pass) {
+    const err = new Error("Pass not found");
+    err.status = 404;
+    throw err;
+  }
+  if (pass.status !== "APPROVED" && pass.status !== "IN_PROGRESS") {
+    const err = new Error(`Pass is not approved (status: ${pass.status})`);
+    err.status = 409;
+    throw err;
+  }
+
+  const member = await env.DB.prepare(
+    `SELECT * FROM pass_members WHERE pass_id = ? AND employee_id = ?`
+  ).bind(pass_id, employee_id).first();
+  if (!member) {
+    const err = new Error("Employee does not belong to this pass");
+    err.status = 403;
+    throw err;
+  }
+  if (member.member_status === "RETURNED" || member.member_status === "CANCELLED") {
+    const err = new Error(`Employee movement already closed (${member.member_status})`);
+    err.status = 409;
+    throw err;
+  }
+
+  // Duplicate check (level 2 - Worker API). Level 3 (DB UNIQUE constraint) is the real backstop.
+  const dup = await env.DB.prepare(
+    `SELECT event_id FROM movement_events WHERE pass_id = ? AND employee_id = ? AND event_type = ? AND idempotency_key = ?`
+  ).bind(pass_id, employee_id, event_type, idempotency_key).first();
+  if (dup) {
+    // Already processed - return success idempotently rather than erroring.
+    return { event_id: dup.event_id, duplicate: true };
+  }
+
+  const newMemberStatus = memberStatusFor(event_type);
+
+  // Atomic batch: insert event + update member status + flip pass to IN_PROGRESS on first GATE_OUT.
+  const stmts = [
+    env.DB.prepare(
+      `INSERT INTO movement_events (pass_id, employee_id, location_id, event_type, recorded_by, device_info, idempotency_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(pass_id, employee_id, location_id ?? null, event_type, user.userId, request.headers.get("User-Agent") || "", idempotency_key),
+    env.DB.prepare(
+      `UPDATE pass_members SET member_status = ? WHERE pass_id = ? AND employee_id = ?`
+    ).bind(newMemberStatus, pass_id, employee_id),
+  ];
+
+  if (event_type === "GATE_OUT" && pass.status === "APPROVED") {
+    stmts.push(
+      env.DB.prepare(`UPDATE gate_passes SET status = 'IN_PROGRESS', updated_at = datetime('now') WHERE pass_id = ?`).bind(pass_id)
+    );
+  }
+
+  const batchResults = await env.DB.batch(stmts);
+  const eventId = batchResults[0]?.meta?.last_row_id;
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: `MOVEMENT_${event_type}`,
+    recordType: "movement_event",
+    recordId: eventId,
+    details: { pass_id, employee_id, location_id },
+    request,
+  });
+
+  // If this was a GATE_IN, check whether the whole pass can now be completed
+  // (spec section 5: must NOT close until every member has returned).
+  if (event_type === "GATE_IN") {
+    await maybeCompletePass(env, pass_id, user, request);
+  }
+
+  return { event_id: eventId, member_status: newMemberStatus };
+}
+
+async function maybeCompletePass(env, passId, user, request) {
+  const { results } = await env.DB.prepare(
+    `SELECT member_status FROM pass_members WHERE pass_id = ?`
+  ).bind(passId).all();
+
+  const allResolved = results.every((m) => m.member_status === "RETURNED" || m.member_status === "CANCELLED");
+  if (allResolved) {
+    await env.DB.prepare(
+      `UPDATE gate_passes SET status = 'COMPLETED', updated_at = datetime('now') WHERE pass_id = ?`
+    ).bind(passId).run();
+    await writeAudit(env, {
+      userId: user.userId,
+      action: "PASS_COMPLETED",
+      recordType: "gate_pass",
+      recordId: passId,
+      request,
+    });
+  }
+}
+
+// Live status dashboard (spec section 11): calculated from each employee's
+// latest movement event across all currently-active (non-completed) passes.
+export async function getLiveStatus(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT e.employee_id, e.full_name, pm.member_status, gp.pass_number, gp.expected_return
+    FROM pass_members pm
+    JOIN employees e ON e.employee_id = pm.employee_id
+    JOIN gate_passes gp ON gp.pass_id = pm.pass_id
+    WHERE gp.status IN ('APPROVED', 'IN_PROGRESS')
+      AND pm.member_status NOT IN ('RETURNED', 'CANCELLED')
+  `).all();
+
+  const now = Date.now();
+  const outside = [];
+  let overdueCount = 0;
+
+  for (const row of results) {
+    const overdue = row.expected_return && new Date(row.expected_return).getTime() < now;
+    if (overdue) overdueCount++;
+    outside.push({ ...row, overdue });
+  }
+
+  const totalEmployees = await env.DB.prepare(`SELECT COUNT(*) AS c FROM employees WHERE status = 'ACTIVE'`).first();
+
+  return {
+    inside: (totalEmployees?.c ?? 0) - outside.length,
+    outside: outside.filter((o) => o.member_status === "OUTSIDE").length,
+    at_internal_location: outside.filter((o) => o.member_status === "AT_INTERNAL_LOCATION").length,
+    at_external_location: outside.filter((o) => o.member_status === "AT_EXTERNAL_LOCATION").length,
+    overdue: overdueCount,
+    details: outside,
+  };
+}
