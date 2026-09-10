@@ -1,4 +1,4 @@
-const CACHE_NAME = "gatepass-shell-v2";
+const CACHE_NAME = "gatepass-shell-v3";
 const SHELL_FILES = [
   "/",
   "/index.html",
@@ -8,13 +8,17 @@ const SHELL_FILES = [
   "/js/app.js",
   "/js/auth.js",
   "/js/api.js",
+  "/js/qr.js",
   "/js/dashboard.js",
   "/js/gatepass.js",
+  "/js/approvals.js",
   "/js/movement.js",
   "/js/security.js",
   "/js/employees.js",
   "/js/locations.js",
   "/js/reports.js",
+  "/js/users.js",
+  "/js/assisted.js",
   "/manifest.json",
 ];
 
@@ -41,7 +45,16 @@ self.addEventListener("fetch", (event) => {
     return; // let it go straight to the network
   }
 
+  // Network-first, cache as offline fallback only. Prefer a fresh copy
+  // whenever the device is online - this is an actively-changing admin app,
+  // not a static brochure site, so staleness is worse than an extra fetch.
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
