@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Gate Pass System</title>
   <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#0f172a" />
+  <meta name="theme-color" content="#4f46e5" />
   <link rel="stylesheet" href="css/main.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
   <link rel="stylesheet" href="css/mobile.css" />
@@ -15,15 +15,31 @@
   <!-- Employee CSV/XLSX import parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+  <!-- Dashboard charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
 </head>
 <body>
-  <header id="app-header">
-    <div class="brand">Gate Pass System</div>
-    <nav id="app-nav"></nav>
-  </header>
-  <main id="app-main"></main>
+  <div id="app-shell">
+    <aside id="app-sidebar">
+      <div class="sidebar-brand">
+        <span class="sidebar-brand-mark">GP</span>
+        <span class="sidebar-brand-text">Gate Pass</span>
+      </div>
+      <nav id="app-nav"></nav>
+      <div id="sidebar-footer"></div>
+    </aside>
 
-  <script>window.GATEPASS_API_BASE = "https://gate-pass-api.slcantec.workers.dev/api";</script>
+    <div id="app-body">
+      <header id="app-topbar">
+        <button id="sidebar-toggle" aria-label="Toggle menu">&#9776;</button>
+        <h1 id="page-title"></h1>
+        <div id="topbar-user"></div>
+      </header>
+      <main id="app-main"></main>
+    </div>
+  </div>
+  <div id="sidebar-backdrop"></div>
+
   <script src="js/api.js"></script>
   <script src="js/qr.js"></script>
   <script src="js/auth.js"></script>

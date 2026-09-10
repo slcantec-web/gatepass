@@ -12,7 +12,7 @@ import { recordMovementEvent, getLiveStatus } from "./movements.js";
 import { listUsers, createUser, setUserStatus } from "./users.js";
 
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*", // tighten to your Pages domain in production
+  "Access-Control-Allow-Origin": "https://gate-26.pages.dev", // must be a specific origin, not "*", since SameSite=None cookies require credentials support
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",

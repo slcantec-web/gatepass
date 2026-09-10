@@ -70,12 +70,14 @@ export function parseCookies(request) {
 }
 
 export function sessionCookie(token, maxAgeSeconds) {
-  // Secure + HttpOnly + SameSite=Strict as required by the spec (section 15)
-  return `session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAgeSeconds}`;
+  // Secure + HttpOnly + SameSite=None: frontend (Pages) and API (Workers) live on
+  // different domains, so this cookie must be sent cross-site - SameSite=None is
+  // required for that (Strict\/Lax cookies are withheld on cross-site requests).
+  return `session=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${maxAgeSeconds}`;
 }
 
 export function clearSessionCookie() {
-  return `session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+  return `session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`;
 }
 
 export async function createSession(env, userId, request) {

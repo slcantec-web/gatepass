@@ -14,26 +14,53 @@ const NAV_ITEMS = [
   { hash: "#/audit", label: "Audit Log", roles: ["SUPER_ADMIN", "ADMIN"] },
 ];
 
+function pageTitleFor(hash) {
+  const item = NAV_ITEMS.find((i) => i.hash === hash);
+  if (item) return item.label;
+  if (/^#\/passes\/\d+$/.test(hash)) return "Pass Details";
+  return "Gate Pass System";
+}
+
 function renderNav() {
   const nav = document.getElementById("app-nav");
-  if (!window.CurrentUser) { nav.innerHTML = ""; return; }
+  const footer = document.getElementById("sidebar-footer");
+  if (!window.CurrentUser) { nav.innerHTML = ""; footer.innerHTML = ""; return; }
+
+  const currentHash = window.location.hash || "#/dashboard";
   const items = NAV_ITEMS.filter((item) => item.roles.includes(window.CurrentUser.role));
-  nav.innerHTML = items.map((item) => `<a href="${item.hash}" class="nav-link">${item.label}</a>`).join("") +
-    `<a href="#" id="logout-link" class="nav-link nav-link-logout">Logout</a>`;
+  nav.innerHTML = items.map((item) =>
+    `<a href="${item.hash}" class="nav-link${item.hash === currentHash ? " active" : ""}">${item.label}</a>`
+  ).join("");
+
+  footer.innerHTML = `<a href="#" id="logout-link" class="nav-link nav-link-logout">Logout</a>`;
   document.getElementById("logout-link").addEventListener("click", (e) => { e.preventDefault(); handleLogout(); });
+
+  document.getElementById("topbar-user").innerHTML = window.CurrentUser
+    ? `${window.CurrentUser.username}<span class="user-role">${window.CurrentUser.role.replace("_", " ")}</span>`
+    : "";
+}
+
+function closeMobileSidebar() {
+  document.getElementById("app-sidebar").classList.remove("open");
+  document.getElementById("sidebar-backdrop").classList.remove("open");
 }
 
 async function renderApp() {
   const main = document.getElementById("app-main");
   const hash = window.location.hash || "#/dashboard";
+  closeMobileSidebar();
 
   if (!window.CurrentUser) {
     document.getElementById("app-nav").innerHTML = "";
+    document.getElementById("sidebar-footer").innerHTML = "";
+    document.getElementById("topbar-user").innerHTML = "";
+    document.getElementById("page-title").textContent = "";
     renderLoginScreen(main);
     return;
   }
 
   renderNav();
+  document.getElementById("page-title").textContent = pageTitleFor(hash);
 
   const passMatch = hash.match(/^#\/passes\/(\d+)$/);
 
@@ -64,6 +91,13 @@ window.addEventListener("DOMContentLoaded", async () => {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
+
+  document.getElementById("sidebar-toggle").addEventListener("click", () => {
+    document.getElementById("app-sidebar").classList.toggle("open");
+    document.getElementById("sidebar-backdrop").classList.toggle("open");
+  });
+  document.getElementById("sidebar-backdrop").addEventListener("click", closeMobileSidebar);
+
   await tryRestoreSession();
   renderApp();
 });
