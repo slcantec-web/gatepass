@@ -197,6 +197,7 @@ form.stacked-form, form.inline-form {
 .clickable-row { cursor: pointer; }
 .clickable-row:hover { background: var(--accent-light); }
 .row-overdue { background: var(--danger-light); }
+.row-inactive { opacity: 0.55; }
 
 .badge {
   font-size: 0.7rem;
