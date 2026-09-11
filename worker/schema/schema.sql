@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS gate_passes (
   leader_employee_id  INTEGER NOT NULL REFERENCES employees(employee_id),
   from_location_id    INTEGER NOT NULL REFERENCES locations(location_id),
   purpose             TEXT NOT NULL,
+  destination_note    TEXT,
   expected_departure  TEXT,
   expected_return     TEXT,
   pass_type           TEXT NOT NULL DEFAULT 'GROUP',
