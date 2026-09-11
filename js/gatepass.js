@@ -92,12 +92,17 @@ async function renderMyPasses(container) {
 
 async function renderPassDetails(container, passId) {
   container.innerHTML = `<div class="loading">Loading...</div>`;
-  const { pass, members, route, events } = await Api.getGatePass(passId);
+  const [{ pass, members, route, events }, settings] = await Promise.all([
+    Api.getGatePass(passId),
+    Api.getSettings().catch(() => ({ print_enabled: "true" })), // fail open if settings fetch has trouble
+  ]);
+  const printEnabled = settings.print_enabled !== "false";
+
   container.innerHTML = `
     <h2>${pass.pass_number} <span class="badge">${pass.status}</span></h2>
     <p>${pass.purpose}</p>
     <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
-    <button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>
+    ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
@@ -116,19 +121,22 @@ async function renderPassDetails(container, passId) {
     renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
   });
 
-  document.getElementById("print-pass-slip").addEventListener("click", () => {
-    printPassSlip(pass, members, route);
-  });
+  if (printEnabled) {
+    document.getElementById("print-pass-slip").addEventListener("click", () => {
+      printPassSlip(pass, members, route, settings);
+    });
+  }
 }
 
 // Optional physical paper copy of an approved pass - for a driver/worker to
 // carry when they don't have the app on their own device, or as a backup to
 // the on-screen QR. Opens a separate print-only window so it never disturbs
-// the SPA's own layout/state.
-function printPassSlip(pass, members, route) {
+// the SPA's own layout/state. Paper size comes from Super Admin settings.
+function printPassSlip(pass, members, route, settings) {
   const qrCanvas = document.createElement("canvas");
   window.QRCode.toCanvas(qrCanvas, pass.qr_code_token, { width: 160, margin: 1 }, () => {
     const qrDataUrl = qrCanvas.toDataURL("image/png");
+    const pageSize = paperSizeCss(settings);
     const win = window.open("", "_blank", "width=650,height=850");
     if (!win) {
       alert("Your browser blocked the print window. Please allow pop-ups for this site and try again.");
@@ -142,6 +150,7 @@ function printPassSlip(pass, members, route) {
         <meta charset="UTF-8" />
         <title>Gate Pass ${pass.pass_number}</title>
         <style>
+          @page { size: ${pageSize}; margin: 10mm; }
           body { font-family: Arial, Helvetica, sans-serif; color: #111; padding: 28px; }
           h1 { font-size: 19px; margin: 0 0 4px; }
           .subtitle { color: #555; font-size: 12px; margin-bottom: 18px; }
