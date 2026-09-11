@@ -50,11 +50,11 @@ async function renderSecurityGate(container, direction) {
 
   async function loadMembers() {
     if (!passSelect.value) return;
-    const { members } = await Api.getGatePass(passSelect.value);
+    const { pass, members } = await Api.getGatePass(passSelect.value);
     membersContainer.innerHTML = `
       <label>Employee
         <select name="employee_id" required>
-          ${members.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${m.member_status})</option>`).join("")}
+          ${members.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("")}
         </select>
       </label>
     `;

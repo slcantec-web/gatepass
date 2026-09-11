@@ -37,8 +37,6 @@ const Api = {
 
   listLocations: () => apiRequest("/locations"),
   createLocation: (loc) => apiRequest("/locations", { method: "POST", body: loc }),
-  setLocationStatus: (id, status) => apiRequest(`/locations/${id}/status`, { method: "PUT", body: { status } }),
-  regenerateLocationQr: (id) => apiRequest(`/locations/${id}/regenerate-qr`, { method: "POST" }),
 
   listGatePasses: () => apiRequest("/gatepasses"),
   createGatePass: (pass) => apiRequest("/gatepasses", { method: "POST", body: pass }),
@@ -70,3 +68,19 @@ window.Api = Api;
 // A stable per-tab-session idempotency key generator for movement transactions
 // (spec section 17, level 1/2: prevents double-submit from creating duplicate events).
 window.newIdempotencyKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+// member_status only changes when a physical gate/location event is recorded -
+// it does NOT track pass approval. So every member sits at "PENDING" from the
+// moment the pass is created, all the way through HOD approval, right up until
+// Security scans them out at the gate. That reads as "stuck"/broken if shown
+// verbatim, so this maps the same underlying value to a clearer label based on
+// where the *pass* itself is in its own approval lifecycle, without touching
+// the stored data.
+window.formatMemberStatus = function formatMemberStatus(passStatus, memberStatus) {
+  if (memberStatus === "PENDING") {
+    if (passStatus === "PENDING") return "Awaiting HOD Approval";
+    if (passStatus === "REJECTED") return "Pass Rejected";
+    if (passStatus === "APPROVED" || passStatus === "IN_PROGRESS") return "Approved - Awaiting Gate Out";
+  }
+  return memberStatus.replace(/_/g, " ");
+};

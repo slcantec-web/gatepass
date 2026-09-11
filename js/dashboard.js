@@ -27,7 +27,7 @@ async function renderDashboard(container) {
               ${status.details.map((d) => `
                 <tr class="${d.overdue ? "row-overdue" : ""}">
                   <td>${d.full_name}</td>
-                  <td>${d.member_status}</td>
+                  <td>${formatMemberStatus("APPROVED", d.member_status)}</td>
                   <td>${d.pass_number}</td>
                   <td>${d.expected_return ? new Date(d.expected_return).toLocaleString() : "-"}</td>
                 </tr>

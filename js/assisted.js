@@ -55,7 +55,7 @@ async function renderAssistedCheck(container) {
     </form>
   `;
 
-  const locations = (await Api.listLocations()).filter((l) => l.status === "ACTIVE");
+  const locations = await Api.listLocations();
   document.getElementById("assisted-location-select").innerHTML =
     locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("");
 
@@ -65,9 +65,9 @@ async function renderAssistedCheck(container) {
 
   async function loadPassMembers() {
     if (!passSelect.value) { employeeSelect.innerHTML = `<option value="">-- scan badge or select --</option>`; return; }
-    const { members } = await Api.getGatePass(passSelect.value);
+    const { pass, members } = await Api.getGatePass(passSelect.value);
     employeeSelect.innerHTML = `<option value="">-- scan badge or select --</option>` +
-      members.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${m.member_status})</option>`).join("");
+      members.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("");
   }
   passSelect.addEventListener("change", loadPassMembers);
 

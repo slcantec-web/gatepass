@@ -1,10 +1,7 @@
 // js/gatepass.js
 
 async function renderCreatePass(container) {
-  const [employees, allLocations] = await Promise.all([Api.listEmployees(), Api.listLocations()]);
-  // Deleted (INACTIVE) locations stay visible in Location Master for history/restore,
-  // but shouldn't be offered here for new passes.
-  const locations = allLocations.filter((l) => l.status === "ACTIVE");
+  const [employees, locations] = await Promise.all([Api.listEmployees(), Api.listLocations()]);
   container.innerHTML = `
     <h2>Create Movement Pass</h2>
     <form id="create-pass-form" class="stacked-form">
@@ -109,7 +106,7 @@ async function renderPassDetails(container, passId) {
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
-      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${m.member_status}</td></tr>`).join("")}</tbody>
+      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
     </table>
     <h3>Route</h3>
     <ol>${route.map((r) => `<li>${r.location_name}</li>`).join("")}</ol>

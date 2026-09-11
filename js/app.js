@@ -25,13 +25,21 @@ function pageTitleFor(hash) {
 function renderNav() {
   const nav = document.getElementById("app-nav");
   const footer = document.getElementById("sidebar-footer");
-  if (!window.CurrentUser) { nav.innerHTML = ""; footer.innerHTML = ""; return; }
+  const backBtn = document.getElementById("back-button");
+  if (!window.CurrentUser) { nav.innerHTML = ""; footer.innerHTML = ""; if (backBtn) backBtn.style.display = "none"; return; }
 
   const currentHash = window.location.hash || "#/dashboard";
   const items = NAV_ITEMS.filter((item) => item.roles.includes(window.CurrentUser.role));
   nav.innerHTML = items.map((item) =>
     `<a href="${item.hash}" class="nav-link${item.hash === currentHash ? " active" : ""}">${item.label}</a>`
   ).join("");
+
+  // Hide the Back button on whatever counts as "home" for this role (their
+  // first nav item) - there's nothing useful to go back to from there.
+  if (backBtn) {
+    const landingHash = items[0] ? items[0].hash : "#/dashboard";
+    backBtn.style.display = currentHash === landingHash ? "none" : "inline-flex";
+  }
 
   footer.innerHTML = `<a href="#" id="logout-link" class="nav-link nav-link-logout">Logout</a>`;
   document.getElementById("logout-link").addEventListener("click", (e) => { e.preventDefault(); handleLogout(); });
@@ -56,6 +64,7 @@ async function renderApp() {
     document.getElementById("sidebar-footer").innerHTML = "";
     document.getElementById("topbar-user").innerHTML = "";
     document.getElementById("page-title").textContent = "";
+    document.getElementById("back-button").style.display = "none";
     renderLoginScreen(main);
     return;
   }
@@ -105,6 +114,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("sidebar-backdrop").classList.toggle("open");
   });
   document.getElementById("sidebar-backdrop").addEventListener("click", closeMobileSidebar);
+
+  // Every hash change (including the ones this app sets programmatically,
+  // e.g. after creating a pass) pushes a real history entry, so browser-style
+  // Back works reliably here even though the app has no visible browser
+  // chrome once installed as a standalone PWA.
+  document.getElementById("back-button").addEventListener("click", () => {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.location.hash = "#/dashboard";
+    }
+  });
 
   await tryRestoreSession();
   renderApp();
