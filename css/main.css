@@ -97,6 +97,21 @@ body {
   background: none; border: none; font-size: 1.3rem; color: var(--text);
   cursor: pointer; padding: 0.2rem 0.4rem;
 }
+.btn-back {
+  display: none;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+}
+.btn-back:hover { color: var(--accent); background: var(--accent-light); }
 #topbar-user { font-size: 0.85rem; color: var(--text-dim); text-align: right; }
 #topbar-user .user-role { display: block; font-size: 0.72rem; color: var(--accent); font-weight: 600; }
 
@@ -197,7 +212,6 @@ form.stacked-form, form.inline-form {
 .clickable-row { cursor: pointer; }
 .clickable-row:hover { background: var(--accent-light); }
 .row-overdue { background: var(--danger-light); }
-.row-inactive { opacity: 0.55; }
 
 .badge {
   font-size: 0.7rem;
