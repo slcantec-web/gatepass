@@ -55,7 +55,7 @@ async function renderAssistedCheck(container) {
     </form>
   `;
 
-  const locations = await Api.listLocations();
+  const locations = (await Api.listLocations()).filter((l) => l.status === "ACTIVE");
   document.getElementById("assisted-location-select").innerHTML =
     locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("");
 

@@ -5,7 +5,7 @@
 
 async function renderLocationCheck(container) {
   const passes = (await Api.listGatePasses()).filter((p) => p.status === "IN_PROGRESS" || p.status === "APPROVED");
-  const locations = await Api.listLocations();
+  const locations = (await Api.listLocations()).filter((l) => l.status === "ACTIVE");
 
   container.innerHTML = `
     <h2>Location Check-In / Check-Out</h2>

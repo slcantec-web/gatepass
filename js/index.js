@@ -5,7 +5,7 @@
 import { hashPassword, verifyPassword, createSession, getCurrentUser, requireRole, sessionCookie, clearSessionCookie } from "./auth.js";
 import { writeAudit } from "./audit.js";
 import { listEmployees, createEmployee, importEmployees, getEmployeeByBadgeToken } from "./employees.js";
-import { listLocations, createLocation, getLocationByQrToken } from "./locations.js";
+import { listLocations, createLocation, getLocationByQrToken, setLocationStatus, regenerateLocationQr } from "./locations.js";
 import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken } from "./gatepasses.js";
 import { decidePass, listPendingApprovals } from "./approvals.js";
 import { recordMovementEvent, getLiveStatus } from "./movements.js";
@@ -103,6 +103,17 @@ export default {
       if (path === "/api/locations" && request.method === "POST") {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         return json(await createLocation(env, user, await request.json(), request));
+      }
+      const locationStatusMatch = path.match(/^\/api\/locations\/(\d+)\/status$/);
+      if (locationStatusMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { status } = await request.json();
+        return json(await setLocationStatus(env, user, locationStatusMatch[1], status, request));
+      }
+      const locationQrMatch = path.match(/^\/api\/locations\/(\d+)\/regenerate-qr$/);
+      if (locationQrMatch && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await regenerateLocationQr(env, user, locationQrMatch[1], request));
       }
 
       // ---------- GATE PASSES ----------

@@ -15,11 +15,21 @@ async function renderLocationMaster(container) {
     </form>
     <div id="add-location-error" class="error-text"></div>
     <table class="data-table">
-      <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Status</th><th>QR Code</th><th></th></tr></thead>
       <tbody>${locations.map((l) => `
-        <tr>
+        <tr class="${l.status === "INACTIVE" ? "row-inactive" : ""}">
           <td>${l.location_code}</td><td>${l.location_name}</td><td>${l.location_type}</td><td>${l.status}</td>
-          <td><button class="btn-link btn-show-qr" data-token="${l.qr_code_token}" data-name="${l.location_name}">Show QR</button></td>
+          <td>
+            ${l.qr_code_token
+              ? `<button class="btn-link btn-show-qr" data-token="${l.qr_code_token}" data-name="${l.location_name}">Show QR</button>`
+              : `<span class="hint-text">No QR yet</span>`}
+            <button class="btn-link btn-regen-qr" data-location-id="${l.location_id}" data-name="${l.location_name}">${l.qr_code_token ? "Regenerate" : "Generate"} QR</button>
+          </td>
+          <td>
+            <button class="btn-link btn-toggle-location-status" data-location-id="${l.location_id}" data-status="${l.status}" data-name="${l.location_name}">
+              ${l.status === "ACTIVE" ? "Delete" : "Restore"}
+            </button>
+          </td>
         </tr>
       `).join("")}</tbody>
     </table>
@@ -27,6 +37,46 @@ async function renderLocationMaster(container) {
 
   container.querySelectorAll(".btn-show-qr").forEach((btn) => {
     btn.addEventListener("click", () => renderQrModal(btn.dataset.name, btn.dataset.token));
+  });
+
+  // Backfills a token for locations created before QR support existed (still
+  // NULL in the DB), or rotates the existing one if you want to invalidate
+  // whatever was printed/shown before.
+  container.querySelectorAll(".btn-regen-qr").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const originalLabel = btn.textContent;
+      btn.textContent = "Working...";
+      try {
+        const result = await Api.regenerateLocationQr(btn.dataset.locationId);
+        await renderLocationMaster(container);
+        renderQrModal(btn.dataset.name, result.qr_code_token);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
+    });
+  });
+
+  // "Delete" is a soft delete (status -> INACTIVE): it hides the location from
+  // pass creation and check-in pickers everywhere else, but keeps history for
+  // any past gate passes/movement events intact, and can be undone with Restore.
+  container.querySelectorAll(".btn-toggle-location-status").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const deleting = btn.dataset.status === "ACTIVE";
+      if (deleting && !confirm(`Delete "${btn.dataset.name}"? It will be hidden from pass creation and check-in screens, but its history is kept and it can be restored later.`)) {
+        return;
+      }
+      btn.disabled = true;
+      try {
+        await Api.setLocationStatus(btn.dataset.locationId, deleting ? "INACTIVE" : "ACTIVE");
+        renderLocationMaster(container);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+      }
+    });
   });
 
   document.getElementById("add-location-form").addEventListener("submit", async (event) => {

@@ -37,6 +37,8 @@ const Api = {
 
   listLocations: () => apiRequest("/locations"),
   createLocation: (loc) => apiRequest("/locations", { method: "POST", body: loc }),
+  setLocationStatus: (id, status) => apiRequest(`/locations/${id}/status`, { method: "PUT", body: { status } }),
+  regenerateLocationQr: (id) => apiRequest(`/locations/${id}/regenerate-qr`, { method: "POST" }),
 
   listGatePasses: () => apiRequest("/gatepasses"),
   createGatePass: (pass) => apiRequest("/gatepasses", { method: "POST", body: pass }),
