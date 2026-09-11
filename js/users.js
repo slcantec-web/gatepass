@@ -1,128 +1,105 @@
-// worker/src/users.js
-import { hashPassword } from "./auth.js";
-import { writeAudit } from "./audit.js";
+// js/users.js
+const USER_ROLES = ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE", "SECURITY", "MANAGEMENT_VIEWER"];
 
-const VALID_ROLES = ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE", "SECURITY", "MANAGEMENT_VIEWER"];
+async function renderUserManagement(container) {
+  const [users, employees] = await Promise.all([Api.listUsers(), Api.listEmployees()]);
 
-export async function listUsers(env) {
-  const { results } = await env.DB.prepare(
-    `SELECT u.user_id, u.username, u.role, u.status, u.employee_id, e.full_name AS employee_name, u.last_login_at, u.created_at
-     FROM users u LEFT JOIN employees e ON e.employee_id = u.employee_id
-     ORDER BY u.username`
-  ).all();
-  return results;
-}
+  container.innerHTML = `
+    <h2>User Management</h2>
+    <form id="add-user-form" class="inline-form">
+      <input name="username" placeholder="Username" required />
+      <input name="password" type="password" placeholder="Password (min 8 chars)" required minlength="8" />
+      <select name="role" required>
+        ${USER_ROLES.map((r) => `<option value="${r}">${r}</option>`).join("")}
+      </select>
+      <select name="employee_id">
+        <option value="">(no linked employee)</option>
+        ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
+      </select>
+      <button type="submit">Add User</button>
+    </form>
+    <div id="add-user-error" class="error-text"></div>
+    <table class="data-table">
+      <thead><tr><th>Username</th><th>Role</th><th>Employee</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
+      <tbody>
+        ${users.map((u) => `
+          <tr>
+            <td>${u.username}</td>
+            <td>${u.role}</td>
+            <td>${u.employee_name || "-"}</td>
+            <td>${u.status}</td>
+            <td>${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
+            <td>
+              <button class="btn-link btn-toggle-status" data-user-id="${u.user_id}" data-status="${u.status}">
+                ${u.status === "ACTIVE" ? "Deactivate" : "Activate"}
+              </button>
+              <button class="btn-link btn-reset-password" data-user-id="${u.user_id}" data-username="${u.username}">Reset Password</button>
+            </td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+    <div id="reset-password-panel"></div>
+  `;
 
-export async function createUser(env, actingUser, body, request) {
-  const { username, password, role, employee_id } = body;
-  if (!username || !password || !role) {
-    const err = new Error("username, password and role are required");
-    err.status = 400;
-    throw err;
-  }
-  if (!VALID_ROLES.includes(role)) {
-    const err = new Error(`role must be one of: ${VALID_ROLES.join(", ")}`);
-    err.status = 400;
-    throw err;
-  }
-  if (password.length < 8) {
-    const err = new Error("Password must be at least 8 characters");
-    err.status = 400;
-    throw err;
-  }
-
-  const existing = await env.DB.prepare(`SELECT user_id FROM users WHERE username = ?`).bind(username).first();
-  if (existing) {
-    const err = new Error(`Username '${username}' already exists`);
-    err.status = 409;
-    throw err;
-  }
-
-  // Only a SUPER_ADMIN can create another SUPER_ADMIN.
-  if (role === "SUPER_ADMIN" && actingUser.role !== "SUPER_ADMIN") {
-    const err = new Error("Only a Super Admin can create another Super Admin");
-    err.status = 403;
-    throw err;
-  }
-
-  const passwordHash = await hashPassword(password);
-  const result = await env.DB.prepare(
-    `INSERT INTO users (username, password_hash, role, employee_id) VALUES (?, ?, ?, ?)`
-  ).bind(username, passwordHash, role, employee_id ?? null).run();
-
-  await writeAudit(env, {
-    userId: actingUser.userId,
-    action: "ADMIN_CREATED_USER",
-    recordType: "user",
-    recordId: result.meta.last_row_id,
-    details: { username, role },
-    request,
+  document.getElementById("add-user-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const errorEl = document.getElementById("add-user-error");
+    errorEl.textContent = "";
+    const form = new FormData(event.target);
+    try {
+      await Api.createUser({
+        username: form.get("username").trim(),
+        password: form.get("password"),
+        role: form.get("role"),
+        employee_id: form.get("employee_id") ? Number(form.get("employee_id")) : null,
+      });
+      renderUserManagement(container);
+    } catch (err) {
+      errorEl.textContent = err.message;
+    }
   });
 
-  return { user_id: result.meta.last_row_id };
-}
-
-export async function resetPassword(env, actingUser, userId, newPassword, request) {
-  if (!newPassword || newPassword.length < 8) {
-    const err = new Error("New password must be at least 8 characters");
-    err.status = 400;
-    throw err;
-  }
-
-  const target = await env.DB.prepare(`SELECT user_id, username, role FROM users WHERE user_id = ?`).bind(userId).first();
-  if (!target) {
-    const err = new Error("User not found");
-    err.status = 404;
-    throw err;
-  }
-  // Only a SUPER_ADMIN can reset another SUPER_ADMIN's password.
-  if (target.role === "SUPER_ADMIN" && actingUser.role !== "SUPER_ADMIN") {
-    const err = new Error("Only a Super Admin can reset another Super Admin's password");
-    err.status = 403;
-    throw err;
-  }
-
-  const passwordHash = await hashPassword(newPassword);
-  await env.DB.prepare(`UPDATE users SET password_hash = ? WHERE user_id = ?`).bind(passwordHash, userId).run();
-  // Force re-login everywhere - a reset password should invalidate any existing sessions.
-  await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
-
-  await writeAudit(env, {
-    userId: actingUser.userId,
-    action: "ADMIN_RESET_PASSWORD",
-    recordType: "user",
-    recordId: userId,
-    details: { username: target.username },
-    request,
+  container.querySelectorAll(".btn-toggle-status").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const newStatus = btn.dataset.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
+      try {
+        await Api.setUserStatus(btn.dataset.userId, newStatus);
+        renderUserManagement(container);
+      } catch (err) {
+        alert(err.message);
+      }
+    });
   });
 
-  return { user_id: Number(userId), reset: true };
-}
+  container.querySelectorAll(".btn-reset-password").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const panel = document.getElementById("reset-password-panel");
+      panel.innerHTML = `
+        <form id="reset-password-form" class="inline-form">
+          <span>New password for <strong>${btn.dataset.username}</strong>:</span>
+          <input name="new_password" type="text" placeholder="New password (min 8 chars)" minlength="8" required autocomplete="off" />
+          <button type="submit">Set New Password</button>
+          <button type="button" id="cancel-reset-password" class="btn-secondary">Cancel</button>
+        </form>
+        <div id="reset-password-error" class="error-text"></div>
+      `;
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
 
-export async function setUserStatus(env, actingUser, userId, status, request) {
-  if (!["ACTIVE", "INACTIVE"].includes(status)) {
-    const err = new Error("status must be ACTIVE or INACTIVE");
-    err.status = 400;
-    throw err;
-  }
-  if (Number(userId) === actingUser.userId && status === "INACTIVE") {
-    const err = new Error("You cannot deactivate your own account");
-    err.status = 400;
-    throw err;
-  }
+      document.getElementById("cancel-reset-password").addEventListener("click", () => { panel.innerHTML = ""; });
 
-  await env.DB.prepare(`UPDATE users SET status = ? WHERE user_id = ?`).bind(status, userId).run();
-  if (status === "INACTIVE") {
-    await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
-  }
-
-  await writeAudit(env, {
-    userId: actingUser.userId,
-    action: status === "ACTIVE" ? "ADMIN_ACTIVATED_USER" : "ADMIN_DEACTIVATED_USER",
-    recordType: "user",
-    recordId: userId,
-    request,
+      document.getElementById("reset-password-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById("reset-password-error");
+        errorEl.textContent = "";
+        const newPassword = new FormData(event.target).get("new_password");
+        try {
+          await Api.resetPassword(btn.dataset.userId, newPassword);
+          panel.innerHTML = `<p style="color: var(--success); font-weight: 600;">Password updated for ${btn.dataset.username}. They'll need to log in again with the new password.</p>`;
+        } catch (err) {
+          errorEl.textContent = err.message;
+        }
+      });
+    });
   });
-
-  return { user_id: Number(userId), status };
 }
