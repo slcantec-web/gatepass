@@ -25,6 +25,9 @@ async function renderCreatePass(container) {
           ${locations.map((l) => `<option value="${l.location_id}">${l.location_name}</option>`).join("")}
         </select>
       </label>
+      <label>Other destination <span class="hint-text">(only if the actual place isn't listed above - e.g. a one-off customer/vendor site, or still to be decided)</span>
+        <textarea name="destination_note" rows="2" placeholder="e.g. Client site visit - ABC Traders, No. 45 Galle Road, Colombo 03 (not yet in Location Master)"></textarea>
+      </label>
       <label>Purpose<input name="purpose" required /></label>
       <label>Expected Departure<input name="expected_departure" type="datetime-local" /></label>
       <label>Expected Return<input name="expected_return" type="datetime-local" /></label>
@@ -52,6 +55,7 @@ async function renderCreatePass(container) {
         member_employee_ids: memberIds,
         route_location_ids: routeIds,
         purpose: form.get("purpose"),
+        destination_note: form.get("destination_note") || null,
         expected_departure: form.get("expected_departure") || null,
         expected_return: form.get("expected_return") || null,
       });
@@ -101,12 +105,13 @@ async function renderPassDetails(container, passId) {
   container.innerHTML = `
     <h2>${pass.pass_number} <span class="badge">${pass.status}</span></h2>
     <p>${pass.purpose}</p>
+    ${pass.destination_note ? `<p class="hint-text"><strong>Other destination:</strong> ${pass.destination_note}</p>` : ""}
     <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
     ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
-      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
+      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${m.member_status}</td></tr>`).join("")}</tbody>
     </table>
     <h3>Route</h3>
     <ol>${route.map((r) => `<li>${r.location_name}</li>`).join("")}</ol>
@@ -189,6 +194,7 @@ function printPassSlip(pass, members, route, settings) {
           <div><span class="label">Pass Type:</span> ${pass.pass_type}</div>
           <div><span class="label">Expected Departure:</span> ${pass.expected_departure ? new Date(pass.expected_departure).toLocaleString() : "-"}</div>
           <div><span class="label">Expected Return:</span> ${pass.expected_return ? new Date(pass.expected_return).toLocaleString() : "-"}</div>
+          ${pass.destination_note ? `<div style="grid-column: 1 / -1;"><span class="label">Other Destination:</span> ${pass.destination_note}</div>` : ""}
         </div>
 
         <div class="qr-block">
