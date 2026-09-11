@@ -53,6 +53,7 @@ const Api = {
   listUsers: () => apiRequest("/users"),
   createUser: (u) => apiRequest("/users", { method: "POST", body: u }),
   setUserStatus: (id, status) => apiRequest(`/users/${id}/status`, { method: "PUT", body: { status } }),
+  resetPassword: (id, newPassword) => apiRequest(`/users/${id}/password`, { method: "PUT", body: { new_password: newPassword } }),
 
   resolveQr: (token) => apiRequest(`/qr/${encodeURIComponent(token)}`),
 };

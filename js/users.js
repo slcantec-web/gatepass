@@ -29,13 +29,17 @@ async function renderUserManagement(container) {
             <td>${u.employee_name || "-"}</td>
             <td>${u.status}</td>
             <td>${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
-            <td><button class="btn-link btn-toggle-status" data-user-id="${u.user_id}" data-status="${u.status}">
-              ${u.status === "ACTIVE" ? "Deactivate" : "Activate"}
-            </button></td>
+            <td>
+              <button class="btn-link btn-toggle-status" data-user-id="${u.user_id}" data-status="${u.status}">
+                ${u.status === "ACTIVE" ? "Deactivate" : "Activate"}
+              </button>
+              <button class="btn-link btn-reset-password" data-user-id="${u.user_id}" data-username="${u.username}">Reset Password</button>
+            </td>
           </tr>
         `).join("")}
       </tbody>
     </table>
+    <div id="reset-password-panel"></div>
   `;
 
   document.getElementById("add-user-form").addEventListener("submit", async (event) => {
@@ -65,6 +69,37 @@ async function renderUserManagement(container) {
       } catch (err) {
         alert(err.message);
       }
+    });
+  });
+
+  container.querySelectorAll(".btn-reset-password").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const panel = document.getElementById("reset-password-panel");
+      panel.innerHTML = `
+        <form id="reset-password-form" class="inline-form">
+          <span>New password for <strong>${btn.dataset.username}</strong>:</span>
+          <input name="new_password" type="text" placeholder="New password (min 8 chars)" minlength="8" required autocomplete="off" />
+          <button type="submit">Set New Password</button>
+          <button type="button" id="cancel-reset-password" class="btn-secondary">Cancel</button>
+        </form>
+        <div id="reset-password-error" class="error-text"></div>
+      `;
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      document.getElementById("cancel-reset-password").addEventListener("click", () => { panel.innerHTML = ""; });
+
+      document.getElementById("reset-password-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById("reset-password-error");
+        errorEl.textContent = "";
+        const newPassword = new FormData(event.target).get("new_password");
+        try {
+          await Api.resetPassword(btn.dataset.userId, newPassword);
+          panel.innerHTML = `<p style="color: var(--success); font-weight: 600;">Password updated for ${btn.dataset.username}. They'll need to log in again with the new password.</p>`;
+        } catch (err) {
+          errorEl.textContent = err.message;
+        }
+      });
     });
   });
 }

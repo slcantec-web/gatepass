@@ -97,6 +97,7 @@ async function renderPassDetails(container, passId) {
     <h2>${pass.pass_number} <span class="badge">${pass.status}</span></h2>
     <p>${pass.purpose}</p>
     <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
+    <button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
@@ -113,5 +114,89 @@ async function renderPassDetails(container, passId) {
 
   document.getElementById("show-pass-qr").addEventListener("click", () => {
     renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
+  });
+
+  document.getElementById("print-pass-slip").addEventListener("click", () => {
+    printPassSlip(pass, members, route);
+  });
+}
+
+// Optional physical paper copy of an approved pass - for a driver/worker to
+// carry when they don't have the app on their own device, or as a backup to
+// the on-screen QR. Opens a separate print-only window so it never disturbs
+// the SPA's own layout/state.
+function printPassSlip(pass, members, route) {
+  const qrCanvas = document.createElement("canvas");
+  window.QRCode.toCanvas(qrCanvas, pass.qr_code_token, { width: 160, margin: 1 }, () => {
+    const qrDataUrl = qrCanvas.toDataURL("image/png");
+    const win = window.open("", "_blank", "width=650,height=850");
+    if (!win) {
+      alert("Your browser blocked the print window. Please allow pop-ups for this site and try again.");
+      return;
+    }
+
+    win.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <title>Gate Pass ${pass.pass_number}</title>
+        <style>
+          body { font-family: Arial, Helvetica, sans-serif; color: #111; padding: 28px; }
+          h1 { font-size: 19px; margin: 0 0 4px; }
+          .subtitle { color: #555; font-size: 12px; margin-bottom: 18px; }
+          .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; font-size: 13px; margin-bottom: 16px; }
+          .meta-grid .label { color: #666; }
+          .qr-block { text-align: center; margin: 18px 0; }
+          .qr-block img { width: 140px; height: 140px; }
+          .qr-block small { display: block; font-family: monospace; color: #777; margin-top: 4px; font-size: 10px; }
+          table { width: 100%; border-collapse: collapse; margin: 10px 0 18px; }
+          th, td { border: 1px solid #999; padding: 6px 9px; font-size: 12px; text-align: left; }
+          th { background: #f2f2f2; }
+          h3 { font-size: 13px; margin: 16px 0 6px; }
+          .sign-row { display: flex; justify-content: space-between; margin-top: 50px; }
+          .sign-box { width: 46%; text-align: center; font-size: 11px; color: #444; }
+          .sign-line { border-top: 1px solid #333; margin-bottom: 4px; padding-top: 34px; }
+          @media print { .no-print { display: none; } }
+        </style>
+      </head>
+      <body>
+        <button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;">Print</button>
+        <h1>Gate Pass - ${pass.pass_number}</h1>
+        <div class="subtitle">Status: ${pass.status}</div>
+
+        <div class="meta-grid">
+          <div><span class="label">Purpose:</span> ${pass.purpose}</div>
+          <div><span class="label">Pass Type:</span> ${pass.pass_type}</div>
+          <div><span class="label">Expected Departure:</span> ${pass.expected_departure ? new Date(pass.expected_departure).toLocaleString() : "-"}</div>
+          <div><span class="label">Expected Return:</span> ${pass.expected_return ? new Date(pass.expected_return).toLocaleString() : "-"}</div>
+        </div>
+
+        <div class="qr-block">
+          <img src="${qrDataUrl}" alt="Pass QR code" />
+          <small>${pass.qr_code_token}</small>
+        </div>
+
+        <h3>Members</h3>
+        <table>
+          <thead><tr><th>Emp Code</th><th>Name</th></tr></thead>
+          <tbody>${members.map((m) => `<tr><td>${m.emp_code}</td><td>${m.full_name}</td></tr>`).join("")}</tbody>
+        </table>
+
+        <h3>Route</h3>
+        <table>
+          <thead><tr><th>#</th><th>Destination</th></tr></thead>
+          <tbody>${route.map((r, i) => `<tr><td>${i + 1}</td><td>${r.location_name}</td></tr>`).join("") || `<tr><td colspan="2">-</td></tr>`}</tbody>
+        </table>
+
+        <div class="sign-row">
+          <div class="sign-box"><div class="sign-line">Security Gate Out - Signature &amp; Time</div></div>
+          <div class="sign-box"><div class="sign-line">Security Gate In - Signature &amp; Time</div></div>
+        </div>
+      </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
   });
 }
