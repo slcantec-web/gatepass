@@ -133,8 +133,18 @@ async function renderPassDetails(container, passId) {
 // the on-screen QR. Opens a separate print-only window so it never disturbs
 // the SPA's own layout/state. Paper size comes from Super Admin settings.
 function printPassSlip(pass, members, route, settings) {
+  if (!window.QRCode) {
+    alert("QR library failed to load, so the pass slip can't include a QR code. Check your network/CDN access and try again.");
+    return;
+  }
+
   const qrCanvas = document.createElement("canvas");
-  window.QRCode.toCanvas(qrCanvas, pass.qr_code_token, { width: 160, margin: 1 }, () => {
+  window.QRCode.toCanvas(qrCanvas, pass.qr_code_token, { width: 160, margin: 1 }, (err) => {
+    if (err) {
+      console.error("Pass slip QR render failed", err);
+      alert("Could not render the QR code for this pass slip.");
+      return;
+    }
     const qrDataUrl = qrCanvas.toDataURL("image/png");
     const pageSize = paperSizeCss(settings);
     const win = window.open("", "_blank", "width=650,height=850");

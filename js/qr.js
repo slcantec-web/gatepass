@@ -4,8 +4,21 @@
 // Both loaded via CDN <script> tags in index.html.
 
 function renderQrToCanvas(canvas, token) {
-  // Encode just the opaque token - short, and the /api/qr/:token endpoint
-  // resolves it server-side to either a location or a pass (section 13).
+  // Guard against the CDN script not having loaded yet (slow network,
+  // blocked domain, ad-blocker, etc). Without this, a thrown error here
+  // would abort renderQrModal() before it wires up the Close button.
+  if (!window.QRCode) {
+    canvas.width = 220;
+    canvas.height = 70;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fef2f2";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ef4444";
+    ctx.font = "13px sans-serif";
+    ctx.fillText("QR library failed to load.", 10, 28);
+    ctx.fillText("Check your network/CDN access.", 10, 46);
+    return;
+  }
   window.QRCode.toCanvas(canvas, token, { width: 220, margin: 1 }, (err) => {
     if (err) console.error("QR render failed", err);
   });
@@ -23,9 +36,15 @@ function renderQrModal(title, token) {
     </div>
   `;
   document.body.appendChild(modal);
-  renderQrToCanvas(document.getElementById("qr-modal-canvas"), token);
+
+  // Wire up closing FIRST, before anything that could throw (e.g. the QR
+  // library not being loaded). Previously the close handlers were attached
+  // after renderQrToCanvas(), so a failure there left the modal with no way
+  // to close it.
   document.getElementById("qr-modal-close").addEventListener("click", () => modal.remove());
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+
+  renderQrToCanvas(document.getElementById("qr-modal-canvas"), token);
 }
 
 // Opens a camera scanner in a modal. Calls onResult(token) once a QR is
@@ -60,6 +79,11 @@ function openQrScanner(onResult) {
 
   function tick() {
     if (stopped) return;
+    if (!window.jsQR) {
+      document.getElementById("qr-scan-error").textContent =
+        "Scanner library failed to load. Please select manually below.";
+      return;
+    }
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;

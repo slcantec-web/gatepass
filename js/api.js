@@ -56,6 +56,11 @@ const Api = {
   resetPassword: (id, newPassword) => apiRequest(`/users/${id}/password`, { method: "PUT", body: { new_password: newPassword } }),
 
   resolveQr: (token) => apiRequest(`/qr/${encodeURIComponent(token)}`),
+
+  // System Settings (Super Admin panel: js/settings.js, and read by js/gatepass.js
+  // for the print-slip paper size). Backed by worker/src/settings.js.
+  getSettings: () => apiRequest("/settings"),
+  updateSettings: (settings) => apiRequest("/settings", { method: "PUT", body: settings }),
 };
 
 window.Api = Api;

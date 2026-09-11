@@ -149,6 +149,12 @@ async function renderEmployeeMaster(container) {
 function renderBadgeSheet(employees) {
   const sheet = document.getElementById("badge-sheet");
   const withBadges = employees.filter((e) => e.badge_qr_token);
+
+  if (!window.QRCode) {
+    sheet.innerHTML = `<div class="error-text">QR library failed to load, so badges can't be rendered. Check your network/CDN access and reload.</div>`;
+    return;
+  }
+
   sheet.innerHTML = withBadges.map((e) => `
     <div class="badge-card">
       <canvas id="badge-qr-${e.employee_id}"></canvas>
@@ -160,7 +166,9 @@ function renderBadgeSheet(employees) {
   `).join("");
   withBadges.forEach((e) => {
     const canvas = document.getElementById(`badge-qr-${e.employee_id}`);
-    window.QRCode.toCanvas(canvas, e.badge_qr_token, { width: 100, margin: 1 }, () => {});
+    window.QRCode.toCanvas(canvas, e.badge_qr_token, { width: 100, margin: 1 }, (err) => {
+      if (err) console.error("Badge QR render failed", err);
+    });
   });
   setTimeout(() => window.print(), 300);
 }
