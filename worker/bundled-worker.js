@@ -79,14 +79,14 @@ function parseCookies(request) {
 }
 
 function sessionCookie(token, maxAgeSeconds) {
-  // Secure + HttpOnly + SameSite=None: frontend (Pages) and API (Workers) live on
-  // different domains, so this cookie must be sent cross-site - SameSite=None is
-  // required for that (Strict\/Lax cookies are withheld on cross-site requests).
-  return `session=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${maxAgeSeconds}`;
+  // Secure + HttpOnly + SameSite=Lax: frontend and API are subdomains of the
+  // same registrable domain (lksys.dpdns.org), so this is a same-site cookie
+  // and Lax is the standard, safest choice.
+  return `session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
 }
 
 function clearSessionCookie() {
-  return `session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`;
+  return `session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
 async function createSession(env, userId, request) {
@@ -313,6 +313,96 @@ async function createLocation(env, user, body, request) {
   return { location_id: result.meta.last_row_id, qr_code_token: qrToken };
 }
 
+// "Delete" a location without breaking referential integrity: locations are
+// referenced by gate_passes.from_location_id, pass_routes, and movement_events
+// (with PRAGMA foreign_keys = ON, a real DELETE would fail anyway once any of
+// those exist, and would destroy history for completed passes even when it
+// didn't). So this is a soft delete - status flips to INACTIVE, which hides
+// it from pickers on the frontend, and can be reversed with status=ACTIVE.
+async function setLocationStatus(env, user, locationId, status, request) {
+  if (!["ACTIVE", "INACTIVE"].includes(status)) {
+    const err = new Error("status must be ACTIVE or INACTIVE");
+    err.status = 400;
+    throw err;
+  }
+
+  const location = await env.DB.prepare(
+    `SELECT location_id, location_name, status FROM locations WHERE location_id = ?`
+  ).bind(locationId).first();
+  if (!location) {
+    const err = new Error("Location not found");
+    err.status = 404;
+    throw err;
+  }
+
+  if (status === "INACTIVE") {
+    // Don't let a location disappear out from under a pass that's still in flight.
+    const blocking = await env.DB.prepare(
+      `SELECT gp.pass_number FROM gate_passes gp
+       WHERE gp.status IN ('PENDING', 'APPROVED', 'IN_PROGRESS')
+         AND (gp.from_location_id = ? OR EXISTS (
+           SELECT 1 FROM pass_routes pr WHERE pr.pass_id = gp.pass_id AND pr.location_id = ?
+         ))
+       LIMIT 1`
+    ).bind(locationId, locationId).first();
+    if (blocking) {
+      const err = new Error(`Cannot delete: location is used by active gate pass ${blocking.pass_number}`);
+      err.status = 409;
+      throw err;
+    }
+  }
+
+  await env.DB.prepare(`UPDATE locations SET status = ? WHERE location_id = ?`).bind(status, locationId).run();
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: status === "ACTIVE" ? "ADMIN_RESTORED_LOCATION" : "ADMIN_DELETED_LOCATION",
+    recordType: "location",
+    recordId: locationId,
+    details: { location_name: location.location_name },
+    request,
+  });
+
+  return { location_id: Number(locationId), status };
+}
+
+// Assigns a fresh qr_code_token to a location - either because it never had
+// one (e.g. it was created before QR support existed and the column was
+// added later via ALTER TABLE, so it's stuck NULL) or because you want to
+// invalidate the old printed/displayed code and issue a new one.
+async function regenerateLocationQr(env, user, locationId, request) {
+  const location = await env.DB.prepare(
+    `SELECT location_id, location_name FROM locations WHERE location_id = ?`
+  ).bind(locationId).first();
+  if (!location) {
+    const err = new Error("Location not found");
+    err.status = 404;
+    throw err;
+  }
+
+  // qr_code_token is UNIQUE - collision odds are astronomically low with 12
+  // random bytes, but loop a few times rather than trust that blindly.
+  let token;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    token = randomToken(12);
+    const clash = await env.DB.prepare(`SELECT location_id FROM locations WHERE qr_code_token = ?`).bind(token).first();
+    if (!clash) break;
+  }
+
+  await env.DB.prepare(`UPDATE locations SET qr_code_token = ? WHERE location_id = ?`).bind(token, locationId).run();
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "ADMIN_REGENERATED_LOCATION_QR",
+    recordType: "location",
+    recordId: locationId,
+    details: { location_name: location.location_name },
+    request,
+  });
+
+  return { location_id: Number(locationId), qr_code_token: token };
+}
+
 
 /* ---- from gatepasses.js ---- */
 // worker/src/gatepasses.js
@@ -333,12 +423,13 @@ async function nextPassNumber(env) {
 }
 
 // body: { leader_employee_id, from_location_id, purpose, expected_departure, expected_return,
-//         member_employee_ids: [...], route_location_ids: [...] }
+//         member_employee_ids: [...], route_location_ids: [...], destination_note }
 async function createGatePass(env, user, body, request) {
   const {
     leader_employee_id, from_location_id, purpose,
     expected_departure, expected_return,
     member_employee_ids = [], route_location_ids = [],
+    destination_note,
   } = body;
 
   if (!leader_employee_id || !from_location_id || !purpose) {
@@ -347,6 +438,13 @@ async function createGatePass(env, user, body, request) {
     throw err;
   }
 
+  // A pass isn't required to have a registered route location at all: the
+  // destination might genuinely be unknown yet, or it might be a real place
+  // that was simply never added to Location Master. destination_note covers
+  // the latter case as free text, since pass_routes.location_id is a
+  // required foreign key and can't reference something that doesn't exist.
+  const trimmedNote = destination_note ? String(destination_note).trim() : null;
+
   // Leader is always a member too.
   const allMembers = Array.from(new Set([leader_employee_id, ...member_employee_ids]));
   const passNumber = await nextPassNumber(env);
@@ -354,9 +452,9 @@ async function createGatePass(env, user, body, request) {
   const passType = allMembers.length > 1 ? "GROUP" : "SINGLE";
 
   const passResult = await env.DB.prepare(
-    `INSERT INTO gate_passes (pass_number, leader_employee_id, from_location_id, purpose, expected_departure, expected_return, pass_type, status, qr_code_token, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`
-  ).bind(passNumber, leader_employee_id, from_location_id, purpose, expected_departure ?? null, expected_return ?? null, passType, qrToken, user.userId).run();
+    `INSERT INTO gate_passes (pass_number, leader_employee_id, from_location_id, purpose, destination_note, expected_departure, expected_return, pass_type, status, qr_code_token, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`
+  ).bind(passNumber, leader_employee_id, from_location_id, purpose, trimmedNote || null, expected_departure ?? null, expected_return ?? null, passType, qrToken, user.userId).run();
 
   const passId = passResult.meta.last_row_id;
 
@@ -757,6 +855,43 @@ async function createUser(env, actingUser, body, request) {
   return { user_id: result.meta.last_row_id };
 }
 
+async function resetPassword(env, actingUser, userId, newPassword, request) {
+  if (!newPassword || newPassword.length < 8) {
+    const err = new Error("New password must be at least 8 characters");
+    err.status = 400;
+    throw err;
+  }
+
+  const target = await env.DB.prepare(`SELECT user_id, username, role FROM users WHERE user_id = ?`).bind(userId).first();
+  if (!target) {
+    const err = new Error("User not found");
+    err.status = 404;
+    throw err;
+  }
+  // Only a SUPER_ADMIN can reset another SUPER_ADMIN's password.
+  if (target.role === "SUPER_ADMIN" && actingUser.role !== "SUPER_ADMIN") {
+    const err = new Error("Only a Super Admin can reset another Super Admin's password");
+    err.status = 403;
+    throw err;
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  await env.DB.prepare(`UPDATE users SET password_hash = ? WHERE user_id = ?`).bind(passwordHash, userId).run();
+  // Force re-login everywhere - a reset password should invalidate any existing sessions.
+  await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
+
+  await writeAudit(env, {
+    userId: actingUser.userId,
+    action: "ADMIN_RESET_PASSWORD",
+    recordType: "user",
+    recordId: userId,
+    details: { username: target.username },
+    request,
+  });
+
+  return { user_id: Number(userId), reset: true };
+}
+
 async function setUserStatus(env, actingUser, userId, status, request) {
   if (!["ACTIVE", "INACTIVE"].includes(status)) {
     const err = new Error("status must be ACTIVE or INACTIVE");
@@ -786,6 +921,55 @@ async function setUserStatus(env, actingUser, userId, status, request) {
 }
 
 
+/* ---- from settings.js ---- */
+// worker/src/settings.js
+// Backs the Super Admin "System Settings" screen (js/settings.js): whether
+// pass-slip printing is offered, and what paper size it prints to. Stored as
+// simple key/value rows in system_settings so new setting keys don't need a
+// schema migration.
+
+const DEFAULT_SETTINGS = {
+  print_enabled: "true",
+  print_paper_size: "A4",
+  print_custom_width_mm: "80",
+  print_custom_height_mm: "150",
+};
+
+async function getSettings(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT setting_key, setting_value FROM system_settings`
+  ).all();
+
+  const settings = { ...DEFAULT_SETTINGS };
+  for (const row of results) {
+    settings[row.setting_key] = row.setting_value;
+  }
+  return settings;
+}
+
+async function updateSettings(env, user, body, request) {
+  const allowedKeys = Object.keys(DEFAULT_SETTINGS);
+
+  for (const key of allowedKeys) {
+    if (body[key] === undefined) continue;
+    await env.DB.prepare(
+      `INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+       ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`
+    ).bind(key, String(body[key])).run();
+  }
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "ADMIN_UPDATED_SETTINGS",
+    recordType: "system_settings",
+    details: body,
+    request,
+  });
+
+  return getSettings(env);
+}
+
+
 /* ---- from index.js ---- */
 // worker/src/index.js
 // Entry point. Deliberately dependency-free (no bundler/framework required) -
@@ -793,7 +977,7 @@ async function setUserStatus(env, actingUser, userId, status, request) {
 
 
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "https://gate-26.pages.dev", // must be a specific origin, not "*", since SameSite=None cookies require credentials support
+  "Access-Control-Allow-Origin": "https://lksys.dpdns.org", // must be a specific origin, not "*", since SameSite=Lax cookies require credentials support
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
@@ -884,6 +1068,17 @@ const __worker_export__ = {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         return json(await createLocation(env, user, await request.json(), request));
       }
+      const locationStatusMatch = path.match(/^\/api\/locations\/(\d+)\/status$/);
+      if (locationStatusMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { status } = await request.json();
+        return json(await setLocationStatus(env, user, locationStatusMatch[1], status, request));
+      }
+      const locationQrMatch = path.match(/^\/api\/locations\/(\d+)\/regenerate-qr$/);
+      if (locationQrMatch && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await regenerateLocationQr(env, user, locationQrMatch[1], request));
+      }
 
       // ---------- GATE PASSES ----------
       if (path === "/api/gatepasses" && request.method === "GET") {
@@ -936,6 +1131,22 @@ const __worker_export__ = {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         const { status } = await request.json();
         return json(await setUserStatus(env, user, userStatusMatch[1], status, request));
+      }
+      const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
+      if (userPasswordMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { new_password } = await request.json();
+        return json(await resetPassword(env, user, userPasswordMatch[1], new_password, request));
+      }
+
+      // ---------- SETTINGS ----------
+      if (path === "/api/settings" && request.method === "GET") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
+        return json(await getSettings(env));
+      }
+      if (path === "/api/settings" && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN"]);
+        return json(await updateSettings(env, user, await request.json(), request));
       }
 
       // ---------- QR RESOLUTION ----------
