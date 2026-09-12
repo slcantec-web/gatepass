@@ -6,15 +6,15 @@ import { hashPassword, verifyPassword, createSession, getCurrentUser, requireRol
 import { writeAudit } from "./audit.js";
 import { listEmployees, createEmployee, importEmployees, getEmployeeByBadgeToken, setEmployeeDepartment } from "./employees.js";
 import { listLocations, createLocation, getLocationByQrToken, setLocationStatus, regenerateLocationQr } from "./locations.js";
-import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken } from "./gatepasses.js";
+import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken, deleteGatePass } from "./gatepasses.js";
 import { decidePass, listPendingApprovals } from "./approvals.js";
-import { recordMovementEvent, getLiveStatus } from "./movements.js";
+import { recordMovementEvent, getLiveStatus, resetIncompletePasses } from "./movements.js";
 import { listUsers, createUser, setUserStatus, resetPassword } from "./users.js";
 import { getSettings, updateSettings } from "./settings.js";
 import { listDepartments, createDepartment, updateDepartment, setDepartmentStatus } from "./departments.js";
 
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "https://gate-26.pages.dev", // must be a specific origin, not "*", since SameSite=None cookies require credentials support
+  "Access-Control-Allow-Origin": "https://lksys.dpdns.org", // must be a specific origin, not "*", since SameSite=Lax cookies require credentials support
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
@@ -158,6 +158,10 @@ export default {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
         return json(await getGatePassDetails(env, passDetailMatch[1]));
       }
+      if (passDetailMatch && request.method === "DELETE") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE"]);
+        return json(await deleteGatePass(env, user, passDetailMatch[1], request));
+      }
 
       // ---------- APPROVALS ----------
       if (path === "/api/approvals/pending" && request.method === "GET") {
@@ -179,6 +183,10 @@ export default {
       if (path === "/api/movements/live" && request.method === "GET") {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER"]);
         return json(await getLiveStatus(env));
+      }
+      if (path === "/api/movements/reset" && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN"]);
+        return json(await resetIncompletePasses(env, user, request));
       }
 
       // ---------- USER MANAGEMENT ----------

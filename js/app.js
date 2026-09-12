@@ -1,7 +1,12 @@
 // js/app.js
 const NAV_ITEMS = [
   { hash: "#/dashboard", label: "Dashboard", roles: ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER"] },
-  { hash: "#/my-passes", label: "My Gate Passes", roles: ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE"] },
+  // Same screen for everyone (js/gatepass.js: renderMyPasses) - EMPLOYEE logins
+  // get just their own passes from the API; every other role here gets the
+  // full gate pass history instead, so "My Gate Passes" would be the wrong
+  // label for them. Opened up to SECURITY and MANAGEMENT_VIEWER too, since
+  // the backend already serves them the full history via listGatePasses().
+  { hash: "#/my-passes", label: "Gate Passes", roles: ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"] },
   { hash: "#/create-pass", label: "Create Pass", roles: ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE"] },
   { hash: "#/approvals", label: "HOD Approval", roles: ["SUPER_ADMIN", "ADMIN", "HOD"] },
   { hash: "#/security/out", label: "Security Gate Out", roles: ["SUPER_ADMIN", "ADMIN", "SECURITY"] },
