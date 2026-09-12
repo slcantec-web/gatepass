@@ -47,12 +47,23 @@ const Api = {
   listGatePasses: () => apiRequest("/gatepasses"),
   createGatePass: (pass) => apiRequest("/gatepasses", { method: "POST", body: pass }),
   getGatePass: (id) => apiRequest(`/gatepasses/${id}`),
+  // Owner can delete their own PENDING/REJECTED pass; a Super Admin can delete
+  // any pass that isn't COMPLETED. Backed by DELETE /api/gatepasses/:id in
+  // worker/src/gatepasses.js (deleteGatePass) - the server is the source of
+  // truth on who's actually allowed; the frontend just hides the button when
+  // it already knows the call would be rejected.
+  deleteGatePass: (id) => apiRequest(`/gatepasses/${id}`, { method: "DELETE" }),
 
   listPendingApprovals: () => apiRequest("/approvals/pending"),
   decidePass: (id, decision, comments) => apiRequest(`/gatepasses/${id}/decision`, { method: "POST", body: { decision, comments } }),
 
   recordMovement: (event) => apiRequest("/movements", { method: "POST", body: event }),
   liveStatus: () => apiRequest("/movements/live"),
+  // Super Admin "clean slate" tool for the dashboard: force-resolves every
+  // pass stuck PENDING/APPROVED/IN_PROGRESS (PENDING -> REJECTED, the rest ->
+  // COMPLETED with unresolved members CANCELLED). Backed by POST
+  // /api/movements/reset (resetIncompletePasses) in worker/src/movements.js.
+  resetDashboard: () => apiRequest("/movements/reset", { method: "POST" }),
 
   auditLog: () => apiRequest("/audit"),
 

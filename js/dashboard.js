@@ -5,7 +5,15 @@ async function renderDashboard(container) {
   container.innerHTML = `<div class="loading">Loading live status...</div>`;
   try {
     const status = await Api.liveStatus();
+    const isSuperAdmin = window.CurrentUser && window.CurrentUser.role === "SUPER_ADMIN";
+
     container.innerHTML = `
+      ${isSuperAdmin ? `
+        <div class="dashboard-toolbar" style="display:flex; justify-content:flex-end; margin-bottom:1rem;">
+          <button id="reset-dashboard-btn" class="btn-secondary">Reset / Clear Incomplete Passes</button>
+        </div>
+      ` : ""}
+
       <div class="status-cards">
         <div class="status-card status-inside"><span class="count">${status.inside}</span><span class="label">Inside</span></div>
         <div class="status-card status-outside"><span class="count">${status.outside}</span><span class="label">Outside</span></div>
@@ -39,6 +47,34 @@ async function renderDashboard(container) {
     `;
 
     renderStatusChart(status);
+
+    // Super Admin "clean slate" tool: force-resolves every gate pass stuck
+    // PENDING/APPROVED/IN_PROGRESS (a PENDING pass is marked REJECTED; an
+    // APPROVED/IN_PROGRESS pass has any unresolved member CANCELLED and the
+    // pass marked COMPLETED). COMPLETED and REJECTED passes are untouched.
+    // Backed by POST /api/movements/reset.
+    if (isSuperAdmin) {
+      document.getElementById("reset-dashboard-btn").addEventListener("click", async () => {
+        if (!confirm(
+          "This will close out every incomplete gate pass:\n" +
+          "- Pending passes will be marked Rejected\n" +
+          "- Approved / In-Progress passes will be force-completed (unresolved members marked Cancelled)\n\n" +
+          "This cannot be undone. Continue?"
+        )) return;
+
+        const btn = document.getElementById("reset-dashboard-btn");
+        btn.disabled = true;
+        btn.textContent = "Working...";
+        try {
+          await Api.resetDashboard();
+          renderDashboard(container);
+        } catch (err) {
+          alert(err.message);
+          btn.disabled = false;
+          btn.textContent = "Reset / Clear Incomplete Passes";
+        }
+      });
+    }
   } catch (err) {
     container.innerHTML = `<div class="error-text">Could not load dashboard: ${err.message}</div>`;
   }

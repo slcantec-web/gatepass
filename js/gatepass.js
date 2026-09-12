@@ -96,27 +96,64 @@ async function renderCreatePass(container) {
   });
 }
 
+// For EMPLOYEE logins, Api.listGatePasses() returns only their own passes.
+// For SUPER_ADMIN / ADMIN / HOD / SECURITY / MANAGEMENT_VIEWER, the same
+// endpoint returns the full gate pass history (every pass, any status,
+// any leader) - so this same screen doubles as the admin-facing history
+// list, and shows a Leader column whenever that data is present.
 async function renderMyPasses(container) {
   container.innerHTML = `<div class="loading">Loading...</div>`;
   const passes = await Api.listGatePasses();
+  const isHistoryView = passes.some((p) => p.leader_name);
+  const currentEmployeeId = window.CurrentUser && window.CurrentUser.employeeId;
+  const isSuperAdmin = window.CurrentUser && window.CurrentUser.role === "SUPER_ADMIN";
+
+  function canDelete(p) {
+    if (p.status === "COMPLETED") return false;
+    if (isSuperAdmin) return true;
+    return p.leader_employee_id === currentEmployeeId && ["PENDING", "REJECTED"].includes(p.status);
+  }
+
   container.innerHTML = `
-    <h2>My Gate Passes</h2>
+    <h2>${isHistoryView ? "Gate Pass History" : "My Gate Passes"}</h2>
     <table class="data-table">
-      <thead><tr><th>Pass #</th><th>Purpose</th><th>Status</th><th>Created</th></tr></thead>
+      <thead><tr>
+        <th>Pass #</th>${isHistoryView ? "<th>Leader</th>" : ""}<th>Purpose</th><th>Status</th><th>Created</th><th></th>
+      </tr></thead>
       <tbody>
         ${passes.map((p) => `
-          <tr class="clickable-row" data-pass-id="${p.pass_id}">
-            <td>${p.pass_number}</td><td>${p.purpose}</td><td>${p.status}</td>
-            <td>${new Date(p.created_at).toLocaleString()}</td>
+          <tr>
+            <td class="clickable-row" data-pass-id="${p.pass_id}">${p.pass_number}</td>
+            ${isHistoryView ? `<td class="clickable-row" data-pass-id="${p.pass_id}">${p.leader_name || "-"}</td>` : ""}
+            <td class="clickable-row" data-pass-id="${p.pass_id}">${p.purpose}</td>
+            <td class="clickable-row" data-pass-id="${p.pass_id}">${p.status}</td>
+            <td class="clickable-row" data-pass-id="${p.pass_id}">${new Date(p.created_at).toLocaleString()}</td>
+            <td>${canDelete(p) ? `<button class="btn-link btn-delete-pass" data-pass-id="${p.pass_id}" data-pass-number="${p.pass_number}">Delete</button>` : ""}</td>
           </tr>
-        `).join("") || `<tr><td colspan="4">No gate passes yet.</td></tr>`}
+        `).join("") || `<tr><td colspan="${isHistoryView ? 6 : 5}">No gate passes yet.</td></tr>`}
       </tbody>
     </table>
   `;
-  container.querySelectorAll(".clickable-row").forEach((row) => {
-    row.addEventListener("click", () => {
-      window.location.hash = `#/passes/${row.dataset.passId}`;
+
+  container.querySelectorAll(".clickable-row").forEach((cell) => {
+    cell.addEventListener("click", () => {
+      window.location.hash = `#/passes/${cell.dataset.passId}`;
       renderApp();
+    });
+  });
+
+  container.querySelectorAll(".btn-delete-pass").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!confirm(`Delete gate pass ${btn.dataset.passNumber}? This cannot be undone.`)) return;
+      btn.disabled = true;
+      try {
+        await Api.deleteGatePass(btn.dataset.passId);
+        renderMyPasses(container);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+      }
     });
   });
 }
@@ -128,17 +165,27 @@ async function renderPassDetails(container, passId) {
     Api.getSettings().catch(() => ({ print_enabled: "true" })), // fail open if settings fetch has trouble
   ]);
   const printEnabled = settings.print_enabled !== "false";
+  const isRejected = pass.status === "REJECTED";
+
+  const currentEmployeeId = window.CurrentUser && window.CurrentUser.employeeId;
+  const isSuperAdmin = window.CurrentUser && window.CurrentUser.role === "SUPER_ADMIN";
+  const isOwner = pass.leader_employee_id === currentEmployeeId;
+  const canDelete = pass.status !== "COMPLETED" &&
+    (isSuperAdmin || (isOwner && ["PENDING", "REJECTED"].includes(pass.status)));
 
   container.innerHTML = `
     <h2>${pass.pass_number} <span class="badge">${pass.status}</span>${pass.pass_category === "EARLY_LEAVE" ? ` <span class="badge" style="background: var(--warning-light); color: var(--warning);">EARLY LEAVE - NO RETURN</span>` : ""}</h2>
     <p>${pass.purpose}</p>
     ${pass.destination_note ? `<p class="hint-text"><strong>Other destination:</strong> ${pass.destination_note}</p>` : ""}
-    <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
-    ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
+    ${isRejected ? `<p class="error-text">This pass was rejected - its QR code and print slip are no longer available.</p>` : `
+      <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
+      ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
+    `}
+    ${canDelete ? `<button id="delete-pass-btn" class="btn-secondary" style="color: var(--danger); border-color: var(--danger);">Delete Gate Pass</button>` : ""}
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
-      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${m.member_status}</td></tr>`).join("")}</tbody>
+      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
     </table>
     <h3>Route</h3>
     <ol>${route.map((r) => `<li>${r.location_name}</li>`).join("")}</ol>
@@ -149,13 +196,33 @@ async function renderPassDetails(container, passId) {
     </table>
   `;
 
-  document.getElementById("show-pass-qr").addEventListener("click", () => {
-    renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
-  });
+  if (!isRejected) {
+    document.getElementById("show-pass-qr").addEventListener("click", () => {
+      renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
+    });
 
-  if (printEnabled) {
-    document.getElementById("print-pass-slip").addEventListener("click", () => {
-      printPassSlip(pass, members, route, settings);
+    if (printEnabled) {
+      document.getElementById("print-pass-slip").addEventListener("click", () => {
+        printPassSlip(pass, members, route, settings);
+      });
+    }
+  }
+
+  if (canDelete) {
+    document.getElementById("delete-pass-btn").addEventListener("click", async () => {
+      if (!confirm(`Delete gate pass ${pass.pass_number}? This cannot be undone.`)) return;
+      const btn = document.getElementById("delete-pass-btn");
+      btn.disabled = true;
+      btn.textContent = "Deleting...";
+      try {
+        await Api.deleteGatePass(passId);
+        window.location.hash = "#/my-passes";
+        renderApp();
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+        btn.textContent = "Delete Gate Pass";
+      }
     });
   }
 }
