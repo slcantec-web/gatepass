@@ -18,18 +18,25 @@ async function nextPassNumber(env) {
   return `${prefix}${seq}`;
 }
 
+const PASS_CATEGORIES = ["MOVEMENT", "EARLY_LEAVE"];
+
 // body: { leader_employee_id, from_location_id, purpose, expected_departure, expected_return,
-//         member_employee_ids: [...], route_location_ids: [...], destination_note }
+//         member_employee_ids: [...], route_location_ids: [...], destination_note, pass_category }
 export async function createGatePass(env, user, body, request) {
   const {
     leader_employee_id, from_location_id, purpose,
     expected_departure, expected_return,
     member_employee_ids = [], route_location_ids = [],
-    destination_note,
+    destination_note, pass_category = "MOVEMENT",
   } = body;
 
   if (!leader_employee_id || !from_location_id || !purpose) {
     const err = new Error("leader_employee_id, from_location_id and purpose are required");
+    err.status = 400;
+    throw err;
+  }
+  if (!PASS_CATEGORIES.includes(pass_category)) {
+    const err = new Error(`pass_category must be one of: ${PASS_CATEGORIES.join(", ")}`);
     err.status = 400;
     throw err;
   }
@@ -41,6 +48,10 @@ export async function createGatePass(env, user, body, request) {
   // required foreign key and can't reference something that doesn't exist.
   const trimmedNote = destination_note ? String(destination_note).trim() : null;
 
+  // EARLY_LEAVE passes are one-way by definition - there's no return time to
+  // record, so don't persist a stray expected_return even if the client sent one.
+  const effectiveExpectedReturn = pass_category === "EARLY_LEAVE" ? null : (expected_return ?? null);
+
   // Leader is always a member too.
   const allMembers = Array.from(new Set([leader_employee_id, ...member_employee_ids]));
   const passNumber = await nextPassNumber(env);
@@ -48,9 +59,9 @@ export async function createGatePass(env, user, body, request) {
   const passType = allMembers.length > 1 ? "GROUP" : "SINGLE";
 
   const passResult = await env.DB.prepare(
-    `INSERT INTO gate_passes (pass_number, leader_employee_id, from_location_id, purpose, destination_note, expected_departure, expected_return, pass_type, status, qr_code_token, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`
-  ).bind(passNumber, leader_employee_id, from_location_id, purpose, trimmedNote || null, expected_departure ?? null, expected_return ?? null, passType, qrToken, user.userId).run();
+    `INSERT INTO gate_passes (pass_number, leader_employee_id, from_location_id, purpose, destination_note, pass_category, expected_departure, expected_return, pass_type, status, qr_code_token, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`
+  ).bind(passNumber, leader_employee_id, from_location_id, purpose, trimmedNote || null, pass_category, expected_departure ?? null, effectiveExpectedReturn, passType, qrToken, user.userId).run();
 
   const passId = passResult.meta.last_row_id;
 
@@ -97,7 +108,7 @@ export async function listGatePasses(env, user) {
   // Employees see only their own passes (as leader or member); HOD/Admin/Management see all.
   if (["EMPLOYEE"].includes(user.role)) {
     const { results } = await env.DB.prepare(
-      `SELECT DISTINCT gp.pass_id, gp.pass_number, gp.purpose, gp.status, gp.created_at
+      `SELECT DISTINCT gp.pass_id, gp.pass_number, gp.purpose, gp.status, gp.pass_category, gp.created_at
        FROM gate_passes gp
        LEFT JOIN pass_members pm ON pm.pass_id = gp.pass_id
        WHERE gp.leader_employee_id = ? OR pm.employee_id = ?
@@ -107,7 +118,7 @@ export async function listGatePasses(env, user) {
   }
 
   const { results } = await env.DB.prepare(
-    `SELECT pass_id, pass_number, purpose, status, created_at FROM gate_passes ORDER BY created_at DESC LIMIT 200`
+    `SELECT pass_id, pass_number, purpose, status, pass_category, created_at FROM gate_passes ORDER BY created_at DESC LIMIT 200`
   ).all();
   return results;
 }

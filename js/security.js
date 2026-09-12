@@ -15,7 +15,7 @@ async function renderSecurityGate(container, direction) {
     <form id="security-gate-form" class="stacked-form">
       <label>Pass
         <select name="pass_id" required>
-          ${relevant.map((p) => `<option value="${p.pass_id}">${p.pass_number} - ${p.purpose}</option>`).join("")}
+          ${relevant.map((p) => `<option value="${p.pass_id}">${p.pass_number} - ${p.purpose}${p.pass_category === "EARLY_LEAVE" ? " (Early Leave - No Return)" : ""}</option>`).join("")}
         </select>
       </label>
       <div id="pass-members-container"></div>

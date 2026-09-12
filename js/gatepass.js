@@ -5,6 +5,12 @@ async function renderCreatePass(container) {
   container.innerHTML = `
     <h2>Create Movement Pass</h2>
     <form id="create-pass-form" class="stacked-form">
+      <label>Pass Type
+        <select name="pass_category" id="pass-category-select">
+          <option value="MOVEMENT">Movement Pass (leaves &amp; returns same day)</option>
+          <option value="EARLY_LEAVE">Early Leave (leaving before shift end, not returning today)</option>
+        </select>
+      </label>
       <label>From Location
         <select name="from_location_id" required>
           ${locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
@@ -20,21 +26,41 @@ async function renderCreatePass(container) {
           ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
         </select>
       </label>
-      <label>Destination(s) / Route (hold Ctrl/Cmd to multi-select, in order)
-        <select name="route_location_ids" multiple size="6">
-          ${locations.map((l) => `<option value="${l.location_id}">${l.location_name}</option>`).join("")}
-        </select>
-      </label>
-      <label>Other destination <span class="hint-text">(only if the actual place isn't listed above - e.g. a one-off customer/vendor site, or still to be decided)</span>
-        <textarea name="destination_note" rows="2" placeholder="e.g. Client site visit - ABC Traders, No. 45 Galle Road, Colombo 03 (not yet in Location Master)"></textarea>
-      </label>
+      <div id="route-fields">
+        <label>Destination(s) / Route (hold Ctrl/Cmd to multi-select, in order)
+          <select name="route_location_ids" multiple size="6">
+            ${locations.map((l) => `<option value="${l.location_id}">${l.location_name}</option>`).join("")}
+          </select>
+        </label>
+        <label>Other destination <span class="hint-text">(only if the actual place isn't listed above - e.g. a one-off customer/vendor site, or still to be decided)</span>
+          <textarea name="destination_note" rows="2" placeholder="e.g. Client site visit - ABC Traders, No. 45 Galle Road, Colombo 03 (not yet in Location Master)"></textarea>
+        </label>
+      </div>
       <label>Purpose<input name="purpose" required /></label>
       <label>Expected Departure<input name="expected_departure" type="datetime-local" /></label>
-      <label>Expected Return<input name="expected_return" type="datetime-local" /></label>
+      <div id="expected-return-field">
+        <label>Expected Return<input name="expected_return" type="datetime-local" /></label>
+      </div>
+      <p id="early-leave-hint" class="hint-text" style="display:none;">
+        No return time needed - the pass will close automatically as soon as Security records the gate-out.
+      </p>
       <div id="create-pass-error" class="error-text"></div>
       <button type="submit">Submit for Approval</button>
     </form>
   `;
+
+  const categorySelect = document.getElementById("pass-category-select");
+  const expectedReturnField = document.getElementById("expected-return-field");
+  const earlyLeaveHint = document.getElementById("early-leave-hint");
+
+  function applyCategoryVisibility() {
+    const isEarlyLeave = categorySelect.value === "EARLY_LEAVE";
+    expectedReturnField.style.display = isEarlyLeave ? "none" : "";
+    earlyLeaveHint.style.display = isEarlyLeave ? "block" : "none";
+    if (isEarlyLeave) document.querySelector("[name=expected_return]").value = "";
+  }
+  categorySelect.addEventListener("change", applyCategoryVisibility);
+  applyCategoryVisibility();
 
   document.getElementById("create-pass-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -56,6 +82,7 @@ async function renderCreatePass(container) {
         route_location_ids: routeIds,
         purpose: form.get("purpose"),
         destination_note: form.get("destination_note") || null,
+        pass_category: form.get("pass_category"),
         expected_departure: form.get("expected_departure") || null,
         expected_return: form.get("expected_return") || null,
       });
@@ -103,7 +130,7 @@ async function renderPassDetails(container, passId) {
   const printEnabled = settings.print_enabled !== "false";
 
   container.innerHTML = `
-    <h2>${pass.pass_number} <span class="badge">${pass.status}</span></h2>
+    <h2>${pass.pass_number} <span class="badge">${pass.status}</span>${pass.pass_category === "EARLY_LEAVE" ? ` <span class="badge" style="background: var(--warning-light); color: var(--warning);">EARLY LEAVE - NO RETURN</span>` : ""}</h2>
     <p>${pass.purpose}</p>
     ${pass.destination_note ? `<p class="hint-text"><strong>Other destination:</strong> ${pass.destination_note}</p>` : ""}
     <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
@@ -187,13 +214,13 @@ function printPassSlip(pass, members, route, settings) {
       <body>
         <button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;">Print</button>
         <h1>Gate Pass - ${pass.pass_number}</h1>
-        <div class="subtitle">Status: ${pass.status}</div>
+        <div class="subtitle">Status: ${pass.status}${pass.pass_category === "EARLY_LEAVE" ? " - EARLY LEAVE (no return expected today)" : ""}</div>
 
         <div class="meta-grid">
           <div><span class="label">Purpose:</span> ${pass.purpose}</div>
           <div><span class="label">Pass Type:</span> ${pass.pass_type}</div>
           <div><span class="label">Expected Departure:</span> ${pass.expected_departure ? new Date(pass.expected_departure).toLocaleString() : "-"}</div>
-          <div><span class="label">Expected Return:</span> ${pass.expected_return ? new Date(pass.expected_return).toLocaleString() : "-"}</div>
+          <div><span class="label">Expected Return:</span> ${pass.pass_category === "EARLY_LEAVE" ? "Not applicable (Early Leave)" : (pass.expected_return ? new Date(pass.expected_return).toLocaleString() : "-")}</div>
           ${pass.destination_note ? `<div style="grid-column: 1 / -1;"><span class="label">Other Destination:</span> ${pass.destination_note}</div>` : ""}
         </div>
 
@@ -216,7 +243,7 @@ function printPassSlip(pass, members, route, settings) {
 
         <div class="sign-row">
           <div class="sign-box"><div class="sign-line">Security Gate Out - Signature &amp; Time</div></div>
-          <div class="sign-box"><div class="sign-line">Security Gate In - Signature &amp; Time</div></div>
+          ${pass.pass_category === "EARLY_LEAVE" ? "" : `<div class="sign-box"><div class="sign-line">Security Gate In - Signature &amp; Time</div></div>`}
         </div>
       </body>
       </html>

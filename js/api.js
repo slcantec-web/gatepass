@@ -82,5 +82,6 @@ window.formatMemberStatus = function formatMemberStatus(passStatus, memberStatus
     if (passStatus === "REJECTED") return "Pass Rejected";
     if (passStatus === "APPROVED" || passStatus === "IN_PROGRESS") return "Approved - Awaiting Gate Out";
   }
+  if (memberStatus === "LEFT_FOR_DAY") return "Left for the Day (Early Leave)";
   return memberStatus.replace(/_/g, " ");
 };
