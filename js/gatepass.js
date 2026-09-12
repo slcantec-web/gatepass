@@ -5,12 +5,6 @@ async function renderCreatePass(container) {
   container.innerHTML = `
     <h2>Create Movement Pass</h2>
     <form id="create-pass-form" class="stacked-form">
-      <label>Pass Type
-        <select name="pass_category" id="pass-category-select">
-          <option value="MOVEMENT">Movement Pass (leaves &amp; returns same day)</option>
-          <option value="EARLY_LEAVE">Early Leave (leaving before shift end, not returning today)</option>
-        </select>
-      </label>
       <label>From Location
         <select name="from_location_id" required>
           ${locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
@@ -26,41 +20,18 @@ async function renderCreatePass(container) {
           ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
         </select>
       </label>
-      <div id="route-fields">
-        <label>Destination(s) / Route (hold Ctrl/Cmd to multi-select, in order)
-          <select name="route_location_ids" multiple size="6">
-            ${locations.map((l) => `<option value="${l.location_id}">${l.location_name}</option>`).join("")}
-          </select>
-        </label>
-        <label>Other destination <span class="hint-text">(only if the actual place isn't listed above - e.g. a one-off customer/vendor site, or still to be decided)</span>
-          <textarea name="destination_note" rows="2" placeholder="e.g. Client site visit - ABC Traders, No. 45 Galle Road, Colombo 03 (not yet in Location Master)"></textarea>
-        </label>
-      </div>
+      <label>Destination(s) / Route (hold Ctrl/Cmd to multi-select, in order)
+        <select name="route_location_ids" multiple size="6">
+          ${locations.map((l) => `<option value="${l.location_id}">${l.location_name}</option>`).join("")}
+        </select>
+      </label>
       <label>Purpose<input name="purpose" required /></label>
       <label>Expected Departure<input name="expected_departure" type="datetime-local" /></label>
-      <div id="expected-return-field">
-        <label>Expected Return<input name="expected_return" type="datetime-local" /></label>
-      </div>
-      <p id="early-leave-hint" class="hint-text" style="display:none;">
-        No return time needed - the pass will close automatically as soon as Security records the gate-out.
-      </p>
+      <label>Expected Return<input name="expected_return" type="datetime-local" /></label>
       <div id="create-pass-error" class="error-text"></div>
       <button type="submit">Submit for Approval</button>
     </form>
   `;
-
-  const categorySelect = document.getElementById("pass-category-select");
-  const expectedReturnField = document.getElementById("expected-return-field");
-  const earlyLeaveHint = document.getElementById("early-leave-hint");
-
-  function applyCategoryVisibility() {
-    const isEarlyLeave = categorySelect.value === "EARLY_LEAVE";
-    expectedReturnField.style.display = isEarlyLeave ? "none" : "";
-    earlyLeaveHint.style.display = isEarlyLeave ? "block" : "none";
-    if (isEarlyLeave) document.querySelector("[name=expected_return]").value = "";
-  }
-  categorySelect.addEventListener("change", applyCategoryVisibility);
-  applyCategoryVisibility();
 
   document.getElementById("create-pass-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -81,8 +52,6 @@ async function renderCreatePass(container) {
         member_employee_ids: memberIds,
         route_location_ids: routeIds,
         purpose: form.get("purpose"),
-        destination_note: form.get("destination_note") || null,
-        pass_category: form.get("pass_category"),
         expected_departure: form.get("expected_departure") || null,
         expected_return: form.get("expected_return") || null,
       });
@@ -96,27 +65,64 @@ async function renderCreatePass(container) {
   });
 }
 
+// "My Gate Passes" for EMPLOYEE role, or a full "All Gate Passes" history
+// list for SUPER_ADMIN / ADMIN / HOD / SECURITY / MANAGEMENT_VIEWER (the
+// backend already returns every pass to those roles - here we just add the
+// leader's name column and per-row delete controls).
 async function renderMyPasses(container) {
   container.innerHTML = `<div class="loading">Loading...</div>`;
   const passes = await Api.listGatePasses();
+  const role = window.CurrentUser.role;
+  const isAdminView = ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER"].includes(role);
+  const isSuperAdmin = role === "SUPER_ADMIN";
+
+  // Mirrors the backend's deleteGatePass rule: a Super Admin can delete any
+  // non-COMPLETED pass; anyone else can only delete their OWN pass while it's
+  // still PENDING or REJECTED (i.e. before any actual movement happened).
+  function canDelete(p) {
+    if (p.status === "COMPLETED") return false;
+    if (isSuperAdmin) return true;
+    return p.leader_employee_id === window.CurrentUser.employeeId && ["PENDING", "REJECTED"].includes(p.status);
+  }
+
   container.innerHTML = `
-    <h2>My Gate Passes</h2>
+    <h2>${isAdminView ? "All Gate Passes" : "My Gate Passes"}</h2>
     <table class="data-table">
-      <thead><tr><th>Pass #</th><th>Purpose</th><th>Status</th><th>Created</th></tr></thead>
+      <thead><tr>
+        <th>Pass #</th><th>Purpose</th>${isAdminView ? "<th>Leader</th>" : ""}<th>Status</th><th>Created</th><th></th>
+      </tr></thead>
       <tbody>
         ${passes.map((p) => `
-          <tr class="clickable-row" data-pass-id="${p.pass_id}">
-            <td>${p.pass_number}</td><td>${p.purpose}</td><td>${p.status}</td>
-            <td>${new Date(p.created_at).toLocaleString()}</td>
+          <tr data-pass-id="${p.pass_id}">
+            <td class="clickable-row">${p.pass_number}</td>
+            <td class="clickable-row">${p.purpose}</td>
+            ${isAdminView ? `<td class="clickable-row">${p.leader_name || "-"}</td>` : ""}
+            <td class="clickable-row">${p.status}</td>
+            <td class="clickable-row">${new Date(p.created_at).toLocaleString()}</td>
+            <td>${canDelete(p) ? `<button class="btn-link btn-delete-pass" data-pass-id="${p.pass_id}" data-pass-number="${p.pass_number}" style="color: var(--danger);">Delete</button>` : ""}</td>
           </tr>
-        `).join("") || `<tr><td colspan="4">No gate passes yet.</td></tr>`}
+        `).join("") || `<tr><td colspan="${isAdminView ? 6 : 5}">No gate passes yet.</td></tr>`}
       </tbody>
     </table>
   `;
-  container.querySelectorAll(".clickable-row").forEach((row) => {
-    row.addEventListener("click", () => {
-      window.location.hash = `#/passes/${row.dataset.passId}`;
+
+  container.querySelectorAll(".clickable-row").forEach((cell) => {
+    cell.addEventListener("click", () => {
+      window.location.hash = `#/passes/${cell.closest("tr").dataset.passId}`;
       renderApp();
+    });
+  });
+
+  container.querySelectorAll(".btn-delete-pass").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete gate pass ${btn.dataset.passNumber}? This cannot be undone.`)) return;
+      try {
+        await Api.deleteGatePass(btn.dataset.passId);
+        renderMyPasses(container);
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 }
@@ -128,13 +134,21 @@ async function renderPassDetails(container, passId) {
     Api.getSettings().catch(() => ({ print_enabled: "true" })), // fail open if settings fetch has trouble
   ]);
   const printEnabled = settings.print_enabled !== "false";
+  const isRejected = pass.status === "REJECTED";
+  const isOwner = window.CurrentUser.employeeId === pass.leader_employee_id;
+  const isSuperAdmin = window.CurrentUser.role === "SUPER_ADMIN";
+  const canDelete = pass.status !== "COMPLETED" && (isSuperAdmin || (isOwner && ["PENDING", "REJECTED"].includes(pass.status)));
 
   container.innerHTML = `
-    <h2>${pass.pass_number} <span class="badge">${pass.status}</span>${pass.pass_category === "EARLY_LEAVE" ? ` <span class="badge" style="background: var(--warning-light); color: var(--warning);">EARLY LEAVE - NO RETURN</span>` : ""}</h2>
+    <h2>${pass.pass_number} <span class="badge">${pass.status}</span></h2>
     <p>${pass.purpose}</p>
-    ${pass.destination_note ? `<p class="hint-text"><strong>Other destination:</strong> ${pass.destination_note}</p>` : ""}
-    <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
-    ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
+    ${isRejected
+      ? `<p class="error-text">This pass was rejected — the QR code and printable slip are disabled.</p>`
+      : `
+        <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
+        ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
+      `}
+    ${canDelete ? `<button id="delete-pass-btn" class="btn-secondary" style="color: var(--danger); border-color: var(--danger);">Delete Pass</button>` : ""}
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
@@ -149,13 +163,28 @@ async function renderPassDetails(container, passId) {
     </table>
   `;
 
-  document.getElementById("show-pass-qr").addEventListener("click", () => {
-    renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
-  });
+  if (!isRejected) {
+    document.getElementById("show-pass-qr").addEventListener("click", () => {
+      renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
+    });
 
-  if (printEnabled) {
-    document.getElementById("print-pass-slip").addEventListener("click", () => {
-      printPassSlip(pass, members, route, settings);
+    if (printEnabled) {
+      document.getElementById("print-pass-slip").addEventListener("click", () => {
+        printPassSlip(pass, members, route, settings);
+      });
+    }
+  }
+
+  if (canDelete) {
+    document.getElementById("delete-pass-btn").addEventListener("click", async () => {
+      if (!confirm(`Delete gate pass ${pass.pass_number}? This cannot be undone.`)) return;
+      try {
+        await Api.deleteGatePass(pass.pass_id);
+        window.location.hash = "#/my-passes";
+        renderApp();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   }
 }
@@ -164,6 +193,8 @@ async function renderPassDetails(container, passId) {
 // carry when they don't have the app on their own device, or as a backup to
 // the on-screen QR. Opens a separate print-only window so it never disturbs
 // the SPA's own layout/state. Paper size comes from Super Admin settings.
+// Not offered at all for REJECTED passes - renderPassDetails() never wires
+// up the button in that case.
 function printPassSlip(pass, members, route, settings) {
   if (!window.QRCode) {
     alert("QR library failed to load, so the pass slip can't include a QR code. Check your network/CDN access and try again.");
@@ -214,14 +245,13 @@ function printPassSlip(pass, members, route, settings) {
       <body>
         <button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;">Print</button>
         <h1>Gate Pass - ${pass.pass_number}</h1>
-        <div class="subtitle">Status: ${pass.status}${pass.pass_category === "EARLY_LEAVE" ? " - EARLY LEAVE (no return expected today)" : ""}</div>
+        <div class="subtitle">Status: ${pass.status}</div>
 
         <div class="meta-grid">
           <div><span class="label">Purpose:</span> ${pass.purpose}</div>
           <div><span class="label">Pass Type:</span> ${pass.pass_type}</div>
           <div><span class="label">Expected Departure:</span> ${pass.expected_departure ? new Date(pass.expected_departure).toLocaleString() : "-"}</div>
-          <div><span class="label">Expected Return:</span> ${pass.pass_category === "EARLY_LEAVE" ? "Not applicable (Early Leave)" : (pass.expected_return ? new Date(pass.expected_return).toLocaleString() : "-")}</div>
-          ${pass.destination_note ? `<div style="grid-column: 1 / -1;"><span class="label">Other Destination:</span> ${pass.destination_note}</div>` : ""}
+          <div><span class="label">Expected Return:</span> ${pass.expected_return ? new Date(pass.expected_return).toLocaleString() : "-"}</div>
         </div>
 
         <div class="qr-block">
@@ -243,7 +273,7 @@ function printPassSlip(pass, members, route, settings) {
 
         <div class="sign-row">
           <div class="sign-box"><div class="sign-line">Security Gate Out - Signature &amp; Time</div></div>
-          ${pass.pass_category === "EARLY_LEAVE" ? "" : `<div class="sign-box"><div class="sign-line">Security Gate In - Signature &amp; Time</div></div>`}
+          <div class="sign-box"><div class="sign-line">Security Gate In - Signature &amp; Time</div></div>
         </div>
       </body>
       </html>
