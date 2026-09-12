@@ -17,6 +17,7 @@ const SHELL_FILES = [
   "/js/security.js",
   "/js/employees.js",
   "/js/locations.js",
+  "/js/departments.js",
   "/js/reports.js",
   "/js/users.js",
   "/js/assisted.js",
