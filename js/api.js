@@ -34,6 +34,12 @@ const Api = {
   listEmployees: () => apiRequest("/employees"),
   createEmployee: (emp) => apiRequest("/employees", { method: "POST", body: emp }),
   importEmployees: (rows) => apiRequest("/employees/import", { method: "POST", body: { rows } }),
+  setEmployeeDepartment: (id, departmentId) => apiRequest(`/employees/${id}/department`, { method: "PUT", body: { department_id: departmentId } }),
+
+  listDepartments: () => apiRequest("/departments"),
+  createDepartment: (dept) => apiRequest("/departments", { method: "POST", body: dept }),
+  updateDepartment: (id, dept) => apiRequest(`/departments/${id}`, { method: "PUT", body: dept }),
+  setDepartmentStatus: (id, status) => apiRequest(`/departments/${id}/status`, { method: "PUT", body: { status } }),
 
   listLocations: () => apiRequest("/locations"),
   createLocation: (loc) => apiRequest("/locations", { method: "POST", body: loc }),
@@ -41,14 +47,12 @@ const Api = {
   listGatePasses: () => apiRequest("/gatepasses"),
   createGatePass: (pass) => apiRequest("/gatepasses", { method: "POST", body: pass }),
   getGatePass: (id) => apiRequest(`/gatepasses/${id}`),
-  deleteGatePass: (id) => apiRequest(`/gatepasses/${id}`, { method: "DELETE" }),
 
   listPendingApprovals: () => apiRequest("/approvals/pending"),
   decidePass: (id, decision, comments) => apiRequest(`/gatepasses/${id}/decision`, { method: "POST", body: { decision, comments } }),
 
   recordMovement: (event) => apiRequest("/movements", { method: "POST", body: event }),
   liveStatus: () => apiRequest("/movements/live"),
-  resetDashboard: () => apiRequest("/movements/reset", { method: "POST" }),
 
   auditLog: () => apiRequest("/audit"),
 
@@ -70,3 +74,20 @@ window.Api = Api;
 // A stable per-tab-session idempotency key generator for movement transactions
 // (spec section 17, level 1/2: prevents double-submit from creating duplicate events).
 window.newIdempotencyKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+// member_status only changes when a physical gate/location event is recorded -
+// it does NOT track pass approval. So every member sits at "PENDING" from the
+// moment the pass is created, all the way through HOD approval, right up until
+// Security scans them out at the gate. That reads as "stuck"/broken if shown
+// verbatim, so this maps the same underlying value to a clearer label based on
+// where the *pass* itself is in its own approval lifecycle, without touching
+// the stored data.
+window.formatMemberStatus = function formatMemberStatus(passStatus, memberStatus) {
+  if (memberStatus === "PENDING") {
+    if (passStatus === "PENDING") return "Awaiting HOD Approval";
+    if (passStatus === "REJECTED") return "Pass Rejected";
+    if (passStatus === "APPROVED" || passStatus === "IN_PROGRESS") return "Approved - Awaiting Gate Out";
+  }
+  if (memberStatus === "LEFT_FOR_DAY") return "Left for the Day (Early Leave)";
+  return memberStatus.replace(/_/g, " ");
+};
