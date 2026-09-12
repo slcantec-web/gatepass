@@ -20,13 +20,14 @@ async function renderUserManagement(container) {
     </form>
     <div id="add-user-error" class="error-text"></div>
     <table class="data-table">
-      <thead><tr><th>Username</th><th>Role</th><th>Employee</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
+      <thead><tr><th>Username</th><th>Role</th><th>Employee</th><th>Department</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
       <tbody>
         ${users.map((u) => `
           <tr>
             <td>${u.username}</td>
             <td>${u.role}</td>
             <td>${u.employee_name || "-"}</td>
+            <td>${u.department_name || (u.role === "HOD" ? `<span class="hint-text">Set via Employee Master</span>` : "-")}</td>
             <td>${u.status}</td>
             <td>${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
             <td>

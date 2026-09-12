@@ -94,13 +94,18 @@ async function handleEmployeeImport(event, screenContainer) {
 }
 
 async function renderEmployeeMaster(container) {
-  const employees = await Api.listEmployees();
+  const [employees, departments] = await Promise.all([Api.listEmployees(), Api.listDepartments()]);
+  const activeDepartments = departments.filter((d) => d.status === "ACTIVE");
   container.innerHTML = `
     <h2>Employee Master</h2>
     <form id="add-employee-form" class="inline-form">
       <input name="emp_code" placeholder="Emp Code (e.g. EMP010)" required />
       <input name="full_name" placeholder="Full Name" required />
       <input name="designation" placeholder="Designation" />
+      <select name="department_id">
+        <option value="">(no department)</option>
+        ${activeDepartments.map((d) => `<option value="${d.department_id}">${d.department_name}</option>`).join("")}
+      </select>
       <button type="submit">Add Employee</button>
     </form>
     <div id="add-employee-error" class="error-text"></div>
@@ -116,8 +121,15 @@ async function renderEmployeeMaster(container) {
     <div id="badge-sheet"></div>
 
     <table class="data-table">
-      <thead><tr><th>Code</th><th>Name</th><th>Designation</th><th>Status</th></tr></thead>
-      <tbody>${employees.map((e) => `<tr><td>${e.emp_code}</td><td>${e.full_name}</td><td>${e.designation || "-"}</td><td>${e.status}</td></tr>`).join("")}</tbody>
+      <thead><tr><th>Code</th><th>Name</th><th>Designation</th><th>Department</th><th>Status</th><th></th></tr></thead>
+      <tbody>${employees.map((e) => `
+        <tr>
+          <td>${e.emp_code}</td><td>${e.full_name}</td><td>${e.designation || "-"}</td>
+          <td>${e.department_name || `<span class="hint-text">Not set</span>`}</td>
+          <td>${e.status}</td>
+          <td><button class="btn-link btn-change-dept" data-employee-id="${e.employee_id}" data-name="${e.full_name}" data-department-id="${e.department_id || ""}">Change Dept.</button></td>
+        </tr>
+      `).join("")}</tbody>
     </table>
   `;
 
@@ -133,6 +145,7 @@ async function renderEmployeeMaster(container) {
         emp_code: form.get("emp_code").trim(),
         full_name: form.get("full_name").trim(),
         designation: form.get("designation") || null,
+        department_id: form.get("department_id") ? Number(form.get("department_id")) : null,
       });
       renderEmployeeMaster(container);
     } catch (err) {
@@ -141,6 +154,42 @@ async function renderEmployeeMaster(container) {
   });
 
   document.getElementById("print-badges-btn").addEventListener("click", () => renderBadgeSheet(employees));
+
+  // Lets you assign a department to an employee that doesn't have one yet
+  // (e.g. anyone created before Department Master existed), or move them to
+  // a different department later - without needing a full "edit employee" form.
+  container.querySelectorAll(".btn-change-dept").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const panel = document.getElementById("dept-assign-panel");
+      if (panel) panel.remove();
+
+      const wrapper = document.createElement("div");
+      wrapper.id = "dept-assign-panel";
+      wrapper.className = "inline-form";
+      wrapper.innerHTML = `
+        <span>Department for <strong>${btn.dataset.name}</strong>:</span>
+        <select id="dept-assign-select">
+          <option value="">(no department)</option>
+          ${activeDepartments.map((d) => `<option value="${d.department_id}" ${String(d.department_id) === btn.dataset.departmentId ? "selected" : ""}>${d.department_name}</option>`).join("")}
+        </select>
+        <button id="dept-assign-save">Save</button>
+        <button type="button" id="dept-assign-cancel" class="btn-secondary">Cancel</button>
+      `;
+      btn.closest("tr").after(wrapper);
+      wrapper.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      document.getElementById("dept-assign-cancel").addEventListener("click", () => wrapper.remove());
+      document.getElementById("dept-assign-save").addEventListener("click", async () => {
+        const select = document.getElementById("dept-assign-select");
+        try {
+          await Api.setEmployeeDepartment(btn.dataset.employeeId, select.value ? Number(select.value) : null);
+          renderEmployeeMaster(container);
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+  });
 }
 
 // Prints a physical ID badge (QR + name + code) per employee - for workers

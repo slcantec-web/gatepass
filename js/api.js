@@ -34,6 +34,12 @@ const Api = {
   listEmployees: () => apiRequest("/employees"),
   createEmployee: (emp) => apiRequest("/employees", { method: "POST", body: emp }),
   importEmployees: (rows) => apiRequest("/employees/import", { method: "POST", body: { rows } }),
+  setEmployeeDepartment: (id, departmentId) => apiRequest(`/employees/${id}/department`, { method: "PUT", body: { department_id: departmentId } }),
+
+  listDepartments: () => apiRequest("/departments"),
+  createDepartment: (dept) => apiRequest("/departments", { method: "POST", body: dept }),
+  updateDepartment: (id, dept) => apiRequest(`/departments/${id}`, { method: "PUT", body: dept }),
+  setDepartmentStatus: (id, status) => apiRequest(`/departments/${id}/status`, { method: "PUT", body: { status } }),
 
   listLocations: () => apiRequest("/locations"),
   createLocation: (loc) => apiRequest("/locations", { method: "POST", body: loc }),

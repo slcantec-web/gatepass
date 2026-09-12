@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { hash: "#/assisted-check", label: "Assisted Check", roles: ["SUPER_ADMIN", "ADMIN", "SECURITY"] },
   { hash: "#/employees", label: "Employee Master", roles: ["SUPER_ADMIN", "ADMIN"] },
   { hash: "#/locations", label: "Location Master", roles: ["SUPER_ADMIN", "ADMIN"] },
+  { hash: "#/departments", label: "Department Master", roles: ["SUPER_ADMIN", "ADMIN"] },
   { hash: "#/users", label: "User Management", roles: ["SUPER_ADMIN", "ADMIN"] },
   { hash: "#/settings", label: "System Settings", roles: ["SUPER_ADMIN"] },
   { hash: "#/audit", label: "Audit Log", roles: ["SUPER_ADMIN", "ADMIN"] },
@@ -85,6 +86,7 @@ async function renderApp() {
     if (hash === "#/assisted-check") return renderAssistedCheck(main);
     if (hash === "#/employees") return renderEmployeeMaster(main);
     if (hash === "#/locations") return renderLocationMaster(main);
+    if (hash === "#/departments") return renderDepartmentMaster(main);
     if (hash === "#/users") return renderUserManagement(main);
     if (hash === "#/settings") return renderSystemSettings(main);
     if (hash === "#/audit") return renderAuditLog(main);

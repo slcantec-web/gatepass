@@ -4,13 +4,14 @@
 
 import { hashPassword, verifyPassword, createSession, getCurrentUser, requireRole, sessionCookie, clearSessionCookie } from "./auth.js";
 import { writeAudit } from "./audit.js";
-import { listEmployees, createEmployee, importEmployees, getEmployeeByBadgeToken } from "./employees.js";
+import { listEmployees, createEmployee, importEmployees, getEmployeeByBadgeToken, setEmployeeDepartment } from "./employees.js";
 import { listLocations, createLocation, getLocationByQrToken, setLocationStatus, regenerateLocationQr } from "./locations.js";
 import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken } from "./gatepasses.js";
 import { decidePass, listPendingApprovals } from "./approvals.js";
 import { recordMovementEvent, getLiveStatus } from "./movements.js";
 import { listUsers, createUser, setUserStatus, resetPassword } from "./users.js";
 import { getSettings, updateSettings } from "./settings.js";
+import { listDepartments, createDepartment, updateDepartment, setDepartmentStatus } from "./departments.js";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "https://gate-26.pages.dev", // must be a specific origin, not "*", since SameSite=None cookies require credentials support
@@ -94,6 +95,33 @@ export default {
         const { rows } = await request.json(); // pre-parsed on the frontend (PapaParse / SheetJS)
         return json(await importEmployees(env, user, rows, request));
       }
+      const employeeDeptMatch = path.match(/^\/api\/employees\/(\d+)\/department$/);
+      if (employeeDeptMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { department_id } = await request.json();
+        return json(await setEmployeeDepartment(env, user, employeeDeptMatch[1], department_id, request));
+      }
+
+      // ---------- DEPARTMENTS ----------
+      if (path === "/api/departments" && request.method === "GET") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
+        return json(await listDepartments(env));
+      }
+      if (path === "/api/departments" && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await createDepartment(env, user, await request.json(), request));
+      }
+      const departmentMatch = path.match(/^\/api\/departments\/(\d+)$/);
+      if (departmentMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await updateDepartment(env, user, departmentMatch[1], await request.json(), request));
+      }
+      const departmentStatusMatch = path.match(/^\/api\/departments\/(\d+)\/status$/);
+      if (departmentStatusMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { status } = await request.json();
+        return json(await setDepartmentStatus(env, user, departmentStatusMatch[1], status, request));
+      }
 
       // ---------- LOCATIONS ----------
       if (path === "/api/locations" && request.method === "GET") {
@@ -134,7 +162,7 @@ export default {
       // ---------- APPROVALS ----------
       if (path === "/api/approvals/pending" && request.method === "GET") {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD"]);
-        return json(await listPendingApprovals(env));
+        return json(await listPendingApprovals(env, user));
       }
       const decideMatch = path.match(/^\/api\/gatepasses\/(\d+)\/decision$/);
       if (decideMatch && request.method === "POST") {
