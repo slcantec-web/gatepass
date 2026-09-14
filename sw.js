@@ -1,4 +1,4 @@
-const CACHE_NAME = "gatepass-shell-v4";
+const CACHE_NAME = "gatepass-shell-v5";
 const SHELL_FILES = [
   "/",
   "/index.html",
@@ -13,14 +13,12 @@ const SHELL_FILES = [
   "/js/settings.js",
   "/js/gatepass.js",
   "/js/approvals.js",
-  "/js/movement.js",
-  "/js/security.js",
+  "/js/movementcheck.js",
   "/js/employees.js",
   "/js/locations.js",
   "/js/departments.js",
   "/js/reports.js",
   "/js/users.js",
-  "/js/assisted.js",
   "/manifest.json",
 ];
 
