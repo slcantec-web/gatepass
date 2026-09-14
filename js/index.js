@@ -9,7 +9,7 @@ import { listLocations, createLocation, getLocationByQrToken, setLocationStatus,
 import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken, deleteGatePass } from "./gatepasses.js";
 import { decidePass, listPendingApprovals } from "./approvals.js";
 import { recordMovementEvent, getLiveStatus, resetIncompletePasses } from "./movements.js";
-import { listUsers, createUser, setUserStatus, resetPassword } from "./users.js";
+import { listUsers, createUser, setUserStatus, resetPassword, deleteUser } from "./users.js";
 import { getSettings, updateSettings } from "./settings.js";
 import { listDepartments, createDepartment, updateDepartment, setDepartmentStatus } from "./departments.js";
 
@@ -203,6 +203,11 @@ export default {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         const { status } = await request.json();
         return json(await setUserStatus(env, user, userStatusMatch[1], status, request));
+      }
+      const userDeleteMatch = path.match(/^\/api\/users\/(\d+)$/);
+      if (userDeleteMatch && request.method === "DELETE") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await deleteUser(env, user, userDeleteMatch[1], request));
       }
       const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
       if (userPasswordMatch && request.method === "PUT") {

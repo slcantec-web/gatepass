@@ -35,6 +35,7 @@ async function renderUserManagement(container) {
                 ${u.status === "ACTIVE" ? "Deactivate" : "Activate"}
               </button>
               <button class="btn-link btn-reset-password" data-user-id="${u.user_id}" data-username="${u.username}">Reset Password</button>
+              ${u.user_id !== window.CurrentUser.userId ? `<button class="btn-link btn-delete-user" data-user-id="${u.user_id}" data-username="${u.username}" style="color: var(--danger);">Delete</button>` : ""}
             </td>
           </tr>
         `).join("")}
@@ -101,6 +102,25 @@ async function renderUserManagement(container) {
           errorEl.textContent = err.message;
         }
       });
+    });
+  });
+
+  // Hard delete - the backend refuses (409) if the account has any audit-trail
+  // history (created a gate pass, recorded a movement, or made an approval
+  // decision) and tells you to deactivate instead. So this is safe to offer
+  // on every account: it either removes an unused login cleanly, or gives
+  // you a clear reason it won't.
+  container.querySelectorAll(".btn-delete-user").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(`Delete user '${btn.dataset.username}'? This cannot be undone.`)) return;
+      btn.disabled = true;
+      try {
+        await Api.deleteUser(btn.dataset.userId);
+        renderUserManagement(container);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+      }
     });
   });
 }

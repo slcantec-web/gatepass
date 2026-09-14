@@ -71,6 +71,10 @@ const Api = {
   createUser: (u) => apiRequest("/users", { method: "POST", body: u }),
   setUserStatus: (id, status) => apiRequest(`/users/${id}/status`, { method: "PUT", body: { status } }),
   resetPassword: (id, newPassword) => apiRequest(`/users/${id}/password`, { method: "PUT", body: { new_password: newPassword } }),
+  // Hard delete - only succeeds if the account has no audit-trail history
+  // (no gate passes created, movements recorded, or approvals made). The
+  // backend blocks it otherwise and tells you to deactivate instead.
+  deleteUser: (id) => apiRequest(`/users/${id}`, { method: "DELETE" }),
 
   resolveQr: (token) => apiRequest(`/qr/${encodeURIComponent(token)}`),
 

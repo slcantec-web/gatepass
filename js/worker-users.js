@@ -1,5 +1,4 @@
 // worker/src/users.js
-
 import { hashPassword } from "./auth.js";
 import { writeAudit } from "./audit.js";
 
@@ -7,10 +6,8 @@ const VALID_ROLES = ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE", "SECURITY", "MAN
 
 export async function listUsers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT u.user_id, u.username, u.role, u.status, u.employee_id, e.full_name AS employee_name, d.department_name, u.last_login_at, u.created_at
-     FROM users u
-     LEFT JOIN employees e ON e.employee_id = u.employee_id
-     LEFT JOIN departments d ON d.department_id = e.department_id
+    `SELECT u.user_id, u.username, u.role, u.status, u.employee_id, e.full_name AS employee_name, u.last_login_at, u.created_at
+     FROM users u LEFT JOIN employees e ON e.employee_id = u.employee_id
      ORDER BY u.username`
   ).all();
   return results;
@@ -128,4 +125,63 @@ export async function setUserStatus(env, actingUser, userId, status, request) {
   });
 
   return { user_id: Number(userId), status };
+}
+
+// Hard delete, unlike setUserStatus (soft, reversible). Only makes sense for
+// an account that hasn't actually done anything in the system yet - e.g. a
+// freshly-created login that turned out wrong and needs to be recreated -
+// since users.user_id is referenced by gate_passes.created_by,
+// movement_events.recorded_by and approvals.approver_id (all NOT NULL FKs).
+// If the account has any of that history, this refuses rather than either
+// failing on the FK constraint or silently orphaning the audit trail; the
+// caller should use setUserStatus('INACTIVE') instead to preserve history.
+export async function deleteUser(env, actingUser, userId, request) {
+  const target = await env.DB.prepare(`SELECT user_id, username, role FROM users WHERE user_id = ?`).bind(userId).first();
+  if (!target) {
+    const err = new Error("User not found");
+    err.status = 404;
+    throw err;
+  }
+  if (Number(userId) === actingUser.userId) {
+    const err = new Error("You cannot delete your own account");
+    err.status = 400;
+    throw err;
+  }
+  // Only a SUPER_ADMIN can delete another SUPER_ADMIN (mirrors createUser).
+  if (target.role === "SUPER_ADMIN" && actingUser.role !== "SUPER_ADMIN") {
+    const err = new Error("Only a Super Admin can delete another Super Admin");
+    err.status = 403;
+    throw err;
+  }
+
+  const [passCount, movementCount, approvalCount] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM gate_passes WHERE created_by = ?`).bind(userId).first(),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM movement_events WHERE recorded_by = ?`).bind(userId).first(),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM approvals WHERE approver_id = ?`).bind(userId).first(),
+  ]);
+  const usageParts = [];
+  if (passCount.c > 0) usageParts.push(`created ${passCount.c} gate pass(es)`);
+  if (movementCount.c > 0) usageParts.push(`recorded ${movementCount.c} movement event(s)`);
+  if (approvalCount.c > 0) usageParts.push(`made ${approvalCount.c} approval decision(s)`);
+  if (usageParts.length > 0) {
+    const err = new Error(`Cannot delete '${target.username}': this account has ${usageParts.join(", ")} and is part of the audit trail. Deactivate it instead.`);
+    err.status = 409;
+    throw err;
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId),
+  ]);
+
+  await writeAudit(env, {
+    userId: actingUser.userId,
+    action: "ADMIN_DELETED_USER",
+    recordType: "user",
+    recordId: userId,
+    details: { username: target.username, role: target.role },
+    request,
+  });
+
+  return { deleted: true, user_id: Number(userId) };
 }
