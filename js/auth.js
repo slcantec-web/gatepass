@@ -67,7 +67,17 @@ function renderLoginScreen(container) {
             required
           />
         </label>
-        <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
+        <label>Password
+          <input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            required
+          />
+        </label>
         <div id="login-error" class="error-text"></div>
         <button type="submit">Sign In</button>
       </form>

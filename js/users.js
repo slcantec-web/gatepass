@@ -8,7 +8,7 @@ async function renderUserManagement(container) {
     <h2>User Management</h2>
     <form id="add-user-form" class="inline-form">
       <input name="username" placeholder="Username" required />
-      <input name="password" type="password" placeholder="Password (min 8 chars)" required minlength="8" />
+      <input name="password" type="password" placeholder="Password (min 8 chars)" required minlength="8" autocapitalize="none" autocorrect="off" spellcheck="false" />
       <select name="role" required>
         ${USER_ROLES.map((r) => `<option value="${r}">${r}</option>`).join("")}
       </select>
@@ -80,7 +80,7 @@ async function renderUserManagement(container) {
       panel.innerHTML = `
         <form id="reset-password-form" class="inline-form">
           <span>New password for <strong>${btn.dataset.username}</strong>:</span>
-          <input name="new_password" type="text" placeholder="New password (min 8 chars)" minlength="8" required autocomplete="off" />
+          <input name="new_password" type="text" placeholder="New password (min 8 chars)" minlength="8" required autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" />
           <button type="submit">Set New Password</button>
           <button type="button" id="cancel-reset-password" class="btn-secondary">Cancel</button>
         </form>

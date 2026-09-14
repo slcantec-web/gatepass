@@ -5,12 +5,18 @@ async function renderCreatePass(container) {
   container.innerHTML = `
     <h2>Create Movement Pass</h2>
     <form id="create-pass-form" class="stacked-form">
-      <label>Pass Type
-        <select name="pass_category" id="pass-category-select">
-          <option value="MOVEMENT">Movement Pass (leaves &amp; returns same day)</option>
-          <option value="EARLY_LEAVE">Early Leave (leaving before shift end, not returning today)</option>
-        </select>
-      </label>
+      <label>Pass Type</label>
+      <div class="choice-buttons" id="pass-category-buttons">
+        <button type="button" class="choice-btn active" data-value="MOVEMENT">
+          <span>Movement Pass</span>
+          <span class="choice-btn-sub">Leaves &amp; returns same day</span>
+        </button>
+        <button type="button" class="choice-btn" data-value="EARLY_LEAVE">
+          <span>Early Leave</span>
+          <span class="choice-btn-sub">Leaving before shift end, not returning today</span>
+        </button>
+      </div>
+      <input type="hidden" name="pass_category" id="pass-category-hidden" value="MOVEMENT" />
       <label>From Location
         <select name="from_location_id" required>
           ${locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
@@ -49,17 +55,25 @@ async function renderCreatePass(container) {
     </form>
   `;
 
-  const categorySelect = document.getElementById("pass-category-select");
+  const categoryButtons = document.querySelectorAll("#pass-category-buttons .choice-btn");
+  const categoryHidden = document.getElementById("pass-category-hidden");
   const expectedReturnField = document.getElementById("expected-return-field");
   const earlyLeaveHint = document.getElementById("early-leave-hint");
 
   function applyCategoryVisibility() {
-    const isEarlyLeave = categorySelect.value === "EARLY_LEAVE";
+    const isEarlyLeave = categoryHidden.value === "EARLY_LEAVE";
     expectedReturnField.style.display = isEarlyLeave ? "none" : "";
     earlyLeaveHint.style.display = isEarlyLeave ? "block" : "none";
     if (isEarlyLeave) document.querySelector("[name=expected_return]").value = "";
   }
-  categorySelect.addEventListener("change", applyCategoryVisibility);
+  categoryButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      categoryButtons.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      categoryHidden.value = btn.dataset.value;
+      applyCategoryVisibility();
+    });
+  });
   applyCategoryVisibility();
 
   document.getElementById("create-pass-form").addEventListener("submit", async (event) => {

@@ -52,11 +52,11 @@ async function renderMovementCheck(container) {
         </select>
       </label>
 
-      <label>Event
-        <select name="event_type" id="movement-event-select" required>
-          ${eventDefs.map((e) => `<option value="${e.value}">${e.label}</option>`).join("")}
-        </select>
-      </label>
+      <label>Event</label>
+      <div class="choice-buttons" id="movement-event-buttons">
+        ${eventDefs.map((e, i) => `<button type="button" class="choice-btn${i === 0 ? " active" : ""}" data-value="${e.value}">${e.label}</button>`).join("")}
+      </div>
+      <input type="hidden" name="event_type" id="movement-event-hidden" value="${eventDefs[0] ? eventDefs[0].value : ""}" />
 
       ${isEmployee ? "" : `
         <label>Employee <span class="hint-text">(scan their badge, or select)</span>
@@ -80,14 +80,15 @@ async function renderMovementCheck(container) {
   `;
 
   const passSelect = document.getElementById("movement-pass-select");
-  const eventSelect = document.getElementById("movement-event-select");
+  const eventButtons = document.querySelectorAll("#movement-event-buttons .choice-btn");
+  const eventHidden = document.getElementById("movement-event-hidden");
   const employeeSelect = document.getElementById("movement-employee-select"); // null for EMPLOYEE role
   const locationField = document.getElementById("movement-location-field");
   const errorEl = document.getElementById("movement-error");
   const scanLabel = document.getElementById("movement-scan-label");
 
   function currentEventDef() {
-    return eventDefs.find((e) => e.value === eventSelect.value);
+    return eventDefs.find((e) => e.value === eventHidden.value);
   }
 
   // Gate events don't take a location (the gate isn't one of the registered
@@ -97,7 +98,14 @@ async function renderMovementCheck(container) {
     const def = currentEventDef();
     locationField.style.display = def && def.gate ? "none" : "";
   }
-  eventSelect.addEventListener("change", applyEventVisibility);
+  eventButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      eventButtons.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      eventHidden.value = btn.dataset.value;
+      applyEventVisibility();
+    });
+  });
   applyEventVisibility();
 
   async function loadPassMembers() {
