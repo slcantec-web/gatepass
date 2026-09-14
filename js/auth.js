@@ -23,7 +23,15 @@ async function handleLoginSubmit(event) {
 
   try {
     const username = form.username.value.trim();
-    const password = form.password.value;
+    // Passwords can legitimately contain spaces, so this doesn't trim
+    // whitespace generally - but a single-line input can never hold an
+    // actually-*typed* newline/carriage-return, so any that show up here
+    // only got in via a copy-paste (e.g. from a Notes app or a chat message)
+    // and stripping them can't break a real password. This is the classic
+    // "works on PC, fails on mobile" bug: a password pasted on a phone from
+    // somewhere else often carries an invisible trailing line-break that
+    // typing the same password on a PC keyboard never introduces.
+    const password = form.password.value.replace(/^[\r\n]+|[\r\n]+$/g, "");
     const user = await Api.login(username, password);
     window.CurrentUser = user;
     window.location.hash = "#/dashboard";
