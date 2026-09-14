@@ -256,6 +256,35 @@ form.stacked-form, form.inline-form {
 .badge-card .badge-info { font-size: 0.85rem; }
 .badge-card .badge-info .name { font-weight: 700; }
 
+/* ---------- Choice buttons ---------- */
+/* A button-group replacement for a <select> when there's a small, fixed set
+   of options (event type, pass category, etc) - easier to scan and tap than
+   opening a native dropdown, especially on mobile. Reusable anywhere a
+   single-choice dropdown would otherwise go: render one .choice-btn per
+   option inside a .choice-buttons wrapper, and keep a hidden <input> with
+   the real form field name in sync with whichever button is .active. */
+.choice-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.choice-btn {
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.choice-btn:hover { background: #f9fafb; }
+.choice-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.choice-btn .choice-btn-sub { font-weight: 400; font-size: 0.74rem; color: var(--text-dim); }
+.choice-btn.active .choice-btn-sub { color: rgba(255,255,255,0.85); }
+
 @media print {
   #app-sidebar, #app-topbar, .import-box, #add-employee-form, #print-badges-btn { display: none !important; }
 }

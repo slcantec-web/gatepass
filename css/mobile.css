@@ -2,6 +2,13 @@
   #sidebar-toggle { display: none !important; }
 }
 
+html, body {
+  /* Safety net: nothing on the page should ever be able to push the whole
+     viewport sideways - only the scrollable regions declared below should
+     scroll horizontally, everything else stays put. */
+  overflow-x: hidden;
+}
+
 @media (max-width: 900px) {
   #sidebar-toggle { display: inline-flex; }
 
@@ -21,9 +28,39 @@
   }
   #sidebar-backdrop.open { display: block; }
 
-  #app-main { padding: 1.1rem; }
-  #app-topbar { padding: 0.85rem 1.1rem; }
-  #page-title { font-size: 1rem; }
-  .data-table { font-size: 0.8rem; }
+  #app-main {
+    padding: 0.9rem;
+    /* Tables and long inline-forms are wider than a phone screen - let this
+       one region scroll sideways to reach them, instead of the whole page
+       stretching and everything else (header, nav) shifting with it. */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  #app-topbar { padding: 0.7rem 0.85rem; gap: 0.6rem; }
+  #page-title { font-size: 0.95rem; }
+  #topbar-user {
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .btn-back span, .btn-back { font-size: 0.8rem; }
+
+  .data-table { font-size: 0.8rem; min-width: 540px; }
   .status-cards { grid-template-columns: repeat(2, 1fr); }
+
+  /* Bigger tap targets - the desktop 0.6rem vertical padding is comfortable
+     for a mouse click but easy to mis-tap on a phone. */
+  button, input, select {
+    min-height: 42px;
+  }
+  .btn-link { min-height: auto; }
+
+  .inline-form, .stacked-form, form { max-width: 100%; }
+  .assisted-scan-row { flex-wrap: wrap; }
+
+  .qr-modal { max-width: 92vw; padding: 1.1rem; }
+  .qr-modal video, .qr-modal canvas { max-width: 100%; }
+
+  .choice-btn { flex: 1 1 45%; }
 }
