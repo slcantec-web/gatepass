@@ -49,7 +49,16 @@ function renderLoginScreen(container) {
       <form id="login-form" class="login-card">
         <h1>Gate Pass System</h1>
         <p class="subtitle">Sign in to continue</p>
-        <label>Username<input name="username" autocomplete="username" required /></label>
+        <label>Username
+          <input
+            name="username"
+            autocomplete="username"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            required
+          />
+        </label>
         <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
         <div id="login-error" class="error-text"></div>
         <button type="submit">Sign In</button>

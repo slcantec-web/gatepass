@@ -9,10 +9,12 @@ const NAV_ITEMS = [
   { hash: "#/my-passes", label: "Gate Passes", roles: ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"] },
   { hash: "#/create-pass", label: "Create Pass", roles: ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE"] },
   { hash: "#/approvals", label: "HOD Approval", roles: ["SUPER_ADMIN", "ADMIN", "HOD"] },
-  { hash: "#/security/out", label: "Security Gate Out", roles: ["SUPER_ADMIN", "ADMIN", "SECURITY"] },
-  { hash: "#/security/in", label: "Security Gate In", roles: ["SUPER_ADMIN", "ADMIN", "SECURITY"] },
-  { hash: "#/location-check", label: "Location Check", roles: ["SUPER_ADMIN", "ADMIN", "EMPLOYEE"] },
-  { hash: "#/assisted-check", label: "Assisted Check", roles: ["SUPER_ADMIN", "ADMIN", "SECURITY"] },
+  // Consolidates what used to be four separate tabs (Security Gate Out,
+  // Security Gate In, Location Check, Assisted Check) into one screen
+  // (js/movementcheck.js: renderMovementCheck) that adapts its fields to the
+  // logged-in role instead of making people guess which of four near-
+  // identical tabs is the right one.
+  { hash: "#/movement", label: "Record Movement", roles: ["SUPER_ADMIN", "ADMIN", "SECURITY", "EMPLOYEE"] },
   { hash: "#/employees", label: "Employee Master", roles: ["SUPER_ADMIN", "ADMIN"] },
   { hash: "#/locations", label: "Location Master", roles: ["SUPER_ADMIN", "ADMIN"] },
   { hash: "#/departments", label: "Department Master", roles: ["SUPER_ADMIN", "ADMIN"] },
@@ -85,10 +87,13 @@ async function renderApp() {
     if (hash === "#/my-passes") return renderMyPasses(main);
     if (hash === "#/create-pass") return renderCreatePass(main);
     if (hash === "#/approvals") return renderApprovals(main);
-    if (hash === "#/security/out") return renderSecurityGate(main, "out");
-    if (hash === "#/security/in") return renderSecurityGate(main, "in");
-    if (hash === "#/location-check") return renderLocationCheck(main);
-    if (hash === "#/assisted-check") return renderAssistedCheck(main);
+    if (hash === "#/movement") return renderMovementCheck(main);
+    // Old direct links to the four retired tabs still land somewhere useful
+    // instead of 404ing, in case anyone has one bookmarked.
+    if (hash === "#/security/out" || hash === "#/security/in" || hash === "#/location-check" || hash === "#/assisted-check") {
+      window.location.hash = "#/movement";
+      return;
+    }
     if (hash === "#/employees") return renderEmployeeMaster(main);
     if (hash === "#/locations") return renderLocationMaster(main);
     if (hash === "#/departments") return renderDepartmentMaster(main);
