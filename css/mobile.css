@@ -4,8 +4,8 @@
 
 html, body {
   /* Safety net: nothing on the page should ever be able to push the whole
-     viewport sideways - only the scrollable regions declared below should
-     scroll horizontally, everything else stays put. */
+     viewport sideways. With the table/form fixes below this should rarely
+     even get exercised, but it costs nothing to keep as a backstop. */
   overflow-x: hidden;
 }
 
@@ -28,14 +28,7 @@ html, body {
   }
   #sidebar-backdrop.open { display: block; }
 
-  #app-main {
-    padding: 0.9rem;
-    /* Tables and long inline-forms are wider than a phone screen - let this
-       one region scroll sideways to reach them, instead of the whole page
-       stretching and everything else (header, nav) shifting with it. */
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+  #app-main { padding: 0.9rem; }
   #app-topbar { padding: 0.7rem 0.85rem; gap: 0.6rem; }
   #page-title { font-size: 0.95rem; }
   #topbar-user {
@@ -44,10 +37,6 @@ html, body {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .btn-back span, .btn-back { font-size: 0.8rem; }
-
-  .data-table { font-size: 0.8rem; min-width: 540px; }
-  .status-cards { grid-template-columns: repeat(2, 1fr); }
 
   /* Bigger tap targets - the desktop 0.6rem vertical padding is comfortable
      for a mouse click but easy to mis-tap on a phone. */
@@ -56,11 +45,77 @@ html, body {
   }
   .btn-link { min-height: auto; }
 
-  .inline-form, .stacked-form, form { max-width: 100%; }
+  /* Forms: instead of several inputs sitting side by side at a fixed
+     min-width (which is what was forcing the horizontal overflow), every
+     field in an inline-form stacks to full width on a narrow screen. */
+  .inline-form { flex-direction: column; align-items: stretch; }
+  .inline-form input, .inline-form select, .inline-form button {
+    flex: 1 1 100%;
+    min-width: 0;
+    width: 100%;
+  }
+  .stacked-form, form { max-width: 100%; }
   .assisted-scan-row { flex-wrap: wrap; }
 
   .qr-modal { max-width: 92vw; padding: 1.1rem; }
   .qr-modal video, .qr-modal canvas { max-width: 100%; }
 
   .choice-btn { flex: 1 1 45%; }
+
+  /* ---------- Tables become stacked cards ---------- */
+  /* A <table> with 5-7 columns simply cannot fit a phone screen without
+     shrinking illegibly or forcing horizontal scroll/zoom. Below this width,
+     every row becomes its own card and every cell becomes a labelled row
+     inside it - each screen that renders a .data-table adds a data-label
+     attribute per <td> (e.g. data-label="Status") which ::before below
+     turns into the visible label. No data-label on a cell (action-only
+     columns like a Delete button) just means no label line is shown for it. */
+  .data-table, .data-table thead, .data-table tbody, .data-table tr, .data-table th, .data-table td {
+    display: block;
+    width: 100%;
+  }
+  .data-table thead { display: none; }
+  .data-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .data-table tr:last-child { margin-bottom: 0; }
+  .data-table td {
+    border: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.9rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: right;
+  }
+  .data-table td:last-child { border-bottom: none; }
+  .data-table td:empty { display: none; }
+  .data-table td[colspan] {
+    display: block;
+    text-align: left;
+    color: var(--text-dim);
+  }
+  .data-table td::before {
+    content: attr(data-label);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+    text-align: left;
+    flex-shrink: 0;
+  }
+  .data-table td:not([data-label])::before { content: none; }
+  /* A cell with buttons/links but no data value on its own (pure action
+     column) should left-align its contents instead of pushing them right
+     with no label to balance against. */
+  .data-table td:not([data-label]) {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }
