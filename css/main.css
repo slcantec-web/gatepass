@@ -285,6 +285,51 @@ form.stacked-form, form.inline-form {
 .choice-btn .choice-btn-sub { font-weight: 400; font-size: 0.74rem; color: var(--text-dim); }
 .choice-btn.active .choice-btn-sub { color: rgba(255,255,255,0.85); }
 
+/* ---------- Searchable multi-select (Choices.js) ---------- */
+/* Theming overrides for the CDN-loaded Choices.js widget used on Create
+   Pass's Additional Members and Route Locations fields - both lists can run
+   into the hundreds, where a plain <select multiple> means endless
+   scrolling. Choices.js progressively enhances the existing <select
+   multiple> in place, so the original element stays the source of truth
+   for form submission (no change needed to how the form reads its values). */
+.choices { margin-bottom: 0; font-size: 0.95rem; }
+.choices__inner {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  min-height: 44px;
+}
+.choices.is-focused .choices__inner,
+.choices__input:focus {
+  border-color: var(--accent);
+}
+.choices__list--multiple .choices__item {
+  background: var(--accent);
+  border: none;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem 0.2rem 0.7rem;
+  font-size: 0.8rem;
+}
+.choices__list--multiple .choices__item.is-highlighted { background: #4338ca; }
+.choices__button {
+  border-left-color: rgba(255,255,255,0.4);
+  opacity: 0.85;
+}
+.choices__list--dropdown, .choices__list[aria-expanded] {
+  border-color: var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.choices__list--dropdown .choices__item--selectable.is-highlighted {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+.choices__input {
+  background: var(--card-bg);
+  color: var(--text);
+}
+
 @media print {
   #app-sidebar, #app-topbar, .import-box, #add-employee-form, #print-badges-btn { display: none !important; }
 }
