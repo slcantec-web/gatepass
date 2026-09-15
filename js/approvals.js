@@ -9,7 +9,10 @@ async function renderApprovals(container) {
       <tbody>
         ${pending.map((p) => `
           <tr>
-            <td>${p.pass_number}</td><td>${p.leader_name}</td><td>${p.leader_department || "-"}</td><td>${p.purpose}</td>
+            <td data-label="Pass #">${p.pass_number}</td>
+            <td data-label="Leader">${p.leader_name}</td>
+            <td data-label="Department">${p.leader_department || "-"}</td>
+            <td data-label="Purpose">${p.purpose}</td>
             <td>
               <button class="btn-approve" data-pass-id="${p.pass_id}">Approve</button>
               <button class="btn-reject" data-pass-id="${p.pass_id}">Reject</button>

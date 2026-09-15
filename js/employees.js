@@ -67,7 +67,7 @@ async function handleEmployeeImport(event, screenContainer) {
     <p>${rows.length} row(s) found. Preview:</p>
     <table class="data-table">
       <thead><tr><th>Emp Code</th><th>Full Name</th><th>Designation</th></tr></thead>
-      <tbody>${rows.slice(0, 8).map((r) => `<tr><td>${r.emp_code}</td><td>${r.full_name}</td><td>${r.designation || "-"}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.slice(0, 8).map((r) => `<tr><td data-label="Emp Code">${r.emp_code}</td><td data-label="Full Name">${r.full_name}</td><td data-label="Designation">${r.designation || "-"}</td></tr>`).join("")}</tbody>
     </table>
     ${rows.length > 8 ? `<p>...and ${rows.length - 8} more</p>` : ""}
     <button id="confirm-import-btn">Confirm Import</button>
@@ -124,9 +124,11 @@ async function renderEmployeeMaster(container) {
       <thead><tr><th>Code</th><th>Name</th><th>Designation</th><th>Department</th><th>Status</th><th></th></tr></thead>
       <tbody>${employees.map((e) => `
         <tr>
-          <td>${e.emp_code}</td><td>${e.full_name}</td><td>${e.designation || "-"}</td>
-          <td>${e.department_name || `<span class="hint-text">Not set</span>`}</td>
-          <td>${e.status}</td>
+          <td data-label="Code">${e.emp_code}</td>
+          <td data-label="Name">${e.full_name}</td>
+          <td data-label="Designation">${e.designation || "-"}</td>
+          <td data-label="Department">${e.department_name || `<span class="hint-text">Not set</span>`}</td>
+          <td data-label="Status">${e.status}</td>
           <td><button class="btn-link btn-change-dept" data-employee-id="${e.employee_id}" data-name="${e.full_name}" data-department-id="${e.department_id || ""}">Change Dept.</button></td>
         </tr>
       `).join("")}</tbody>

@@ -14,10 +14,10 @@ async function renderAuditLog(container) {
       <tbody>
         ${rows.map((r) => `
           <tr>
-            <td>${new Date(r.created_at).toLocaleString()}</td>
-            <td>${r.user_id ?? "-"}</td>
-            <td>${r.action}</td>
-            <td>${r.record_type ? `${r.record_type} #${r.record_id}` : "-"}</td>
+            <td data-label="Time">${new Date(r.created_at).toLocaleString()}</td>
+            <td data-label="User">${r.user_id ?? "-"}</td>
+            <td data-label="Action">${r.action}</td>
+            <td data-label="Record">${r.record_type ? `${r.record_type} #${r.record_id}` : "-"}</td>
           </tr>
         `).join("")}
       </tbody>

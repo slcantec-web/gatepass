@@ -18,8 +18,11 @@ async function renderLocationMaster(container) {
       <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Status</th><th>QR Code</th><th></th></tr></thead>
       <tbody>${locations.map((l) => `
         <tr class="${l.status === "INACTIVE" ? "row-inactive" : ""}">
-          <td>${l.location_code}</td><td>${l.location_name}</td><td>${l.location_type}</td><td>${l.status}</td>
-          <td>
+          <td data-label="Code">${l.location_code}</td>
+          <td data-label="Name">${l.location_name}</td>
+          <td data-label="Type">${l.location_type}</td>
+          <td data-label="Status">${l.status}</td>
+          <td data-label="QR Code">
             ${l.qr_code_token
               ? `<button class="btn-link btn-show-qr" data-token="${l.qr_code_token}" data-name="${l.location_name}">Show QR</button>`
               : `<span class="hint-text">No QR yet</span>`}

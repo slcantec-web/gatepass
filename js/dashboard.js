@@ -34,10 +34,10 @@ async function renderDashboard(container) {
             <tbody>
               ${status.details.map((d) => `
                 <tr class="${d.overdue ? "row-overdue" : ""}">
-                  <td>${d.full_name}</td>
-                  <td>${formatMemberStatus("APPROVED", d.member_status)}</td>
-                  <td>${d.pass_number}</td>
-                  <td>${d.expected_return ? new Date(d.expected_return).toLocaleString() : "-"}</td>
+                  <td data-label="Employee">${d.full_name}</td>
+                  <td data-label="Status">${formatMemberStatus("APPROVED", d.member_status)}</td>
+                  <td data-label="Pass">${d.pass_number}</td>
+                  <td data-label="Expected Return">${d.expected_return ? new Date(d.expected_return).toLocaleString() : "-"}</td>
                 </tr>
               `).join("") || `<tr><td colspan="4">No one is currently outside.</td></tr>`}
             </tbody>

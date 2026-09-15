@@ -20,11 +20,11 @@ async function renderDepartmentMaster(container) {
       <thead><tr><th>Code</th><th>Name</th><th>HOD</th><th>Employees</th><th>Status</th><th></th></tr></thead>
       <tbody>${departments.map((d) => `
         <tr class="${d.status === "INACTIVE" ? "row-inactive" : ""}">
-          <td>${d.department_code}</td>
-          <td>${d.department_name}</td>
-          <td>${d.hod_name || `<span class="hint-text">Not set</span>`}</td>
-          <td>${d.employee_count}</td>
-          <td>${d.status}</td>
+          <td data-label="Code">${d.department_code}</td>
+          <td data-label="Name">${d.department_name}</td>
+          <td data-label="HOD">${d.hod_name || `<span class="hint-text">Not set</span>`}</td>
+          <td data-label="Employees">${d.employee_count}</td>
+          <td data-label="Status">${d.status}</td>
           <td>
             <button class="btn-link btn-edit-dept" data-department-id="${d.department_id}" data-name="${d.department_name}" data-hod-id="${d.hod_employee_id || ""}">Edit</button>
             <button class="btn-link btn-toggle-dept-status" data-department-id="${d.department_id}" data-status="${d.status}" data-name="${d.department_name}">

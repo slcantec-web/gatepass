@@ -157,11 +157,11 @@ async function renderMyPasses(container) {
       <tbody>
         ${passes.map((p) => `
           <tr>
-            <td class="clickable-row" data-pass-id="${p.pass_id}">${p.pass_number}</td>
-            ${isHistoryView ? `<td class="clickable-row" data-pass-id="${p.pass_id}">${p.leader_name || "-"}</td>` : ""}
-            <td class="clickable-row" data-pass-id="${p.pass_id}">${p.purpose}</td>
-            <td class="clickable-row" data-pass-id="${p.pass_id}">${p.status}</td>
-            <td class="clickable-row" data-pass-id="${p.pass_id}">${new Date(p.created_at).toLocaleString()}</td>
+            <td class="clickable-row" data-pass-id="${p.pass_id}" data-label="Pass #">${p.pass_number}</td>
+            ${isHistoryView ? `<td class="clickable-row" data-pass-id="${p.pass_id}" data-label="Leader">${p.leader_name || "-"}</td>` : ""}
+            <td class="clickable-row" data-pass-id="${p.pass_id}" data-label="Purpose">${p.purpose}</td>
+            <td class="clickable-row" data-pass-id="${p.pass_id}" data-label="Status">${p.status}</td>
+            <td class="clickable-row" data-pass-id="${p.pass_id}" data-label="Created">${new Date(p.created_at).toLocaleString()}</td>
             <td>${canDelete(p) ? `<button class="btn-link btn-delete-pass" data-pass-id="${p.pass_id}" data-pass-number="${p.pass_number}">Delete</button>` : ""}</td>
           </tr>
         `).join("") || `<tr><td colspan="${isHistoryView ? 6 : 5}">No gate passes yet.</td></tr>`}
@@ -219,14 +219,14 @@ async function renderPassDetails(container, passId) {
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
-      <tbody>${members.map((m) => `<tr><td>${m.emp_code} - ${m.full_name}</td><td>${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
+      <tbody>${members.map((m) => `<tr><td data-label="Employee">${m.emp_code} - ${m.full_name}</td><td data-label="Status">${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
     </table>
     <h3>Route</h3>
     <ol>${route.map((r) => `<li>${r.location_name}</li>`).join("")}</ol>
     <h3>Movement Events</h3>
     <table class="data-table">
       <thead><tr><th>Time</th><th>Employee</th><th>Event</th><th>Location</th></tr></thead>
-      <tbody>${events.map((e) => `<tr><td>${new Date(e.event_time).toLocaleString()}</td><td>${e.full_name}</td><td>${e.event_type}</td><td>${e.location_name || "-"}</td></tr>`).join("") || `<tr><td colspan="4">No movement recorded yet.</td></tr>`}</tbody>
+      <tbody>${events.map((e) => `<tr><td data-label="Time">${new Date(e.event_time).toLocaleString()}</td><td data-label="Employee">${e.full_name}</td><td data-label="Event">${e.event_type}</td><td data-label="Location">${e.location_name || "-"}</td></tr>`).join("") || `<tr><td colspan="4">No movement recorded yet.</td></tr>`}</tbody>
     </table>
   `;
 

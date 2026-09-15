@@ -24,12 +24,12 @@ async function renderUserManagement(container) {
       <tbody>
         ${users.map((u) => `
           <tr>
-            <td>${u.username}</td>
-            <td>${u.role}</td>
-            <td>${u.employee_name || "-"}</td>
-            <td>${u.department_name || (u.role === "HOD" ? `<span class="hint-text">Set via Employee Master</span>` : "-")}</td>
-            <td>${u.status}</td>
-            <td>${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
+            <td data-label="Username">${u.username}</td>
+            <td data-label="Role">${u.role}</td>
+            <td data-label="Employee">${u.employee_name || "-"}</td>
+            <td data-label="Department">${u.department_name || (u.role === "HOD" ? `<span class="hint-text">Set via Employee Master</span>` : "-")}</td>
+            <td data-label="Status">${u.status}</td>
+            <td data-label="Last Login">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
             <td>
               <button class="btn-link btn-toggle-status" data-user-id="${u.user_id}" data-status="${u.status}">
                 ${u.status === "ACTIVE" ? "Deactivate" : "Activate"}
