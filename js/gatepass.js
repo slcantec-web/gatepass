@@ -27,15 +27,15 @@ async function renderCreatePass(container) {
           ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
         </select>
       </label>
-      <label>Additional Members (hold Ctrl/Cmd to multi-select)
-        <select name="member_employee_ids" multiple size="6">
+      <label>Additional Members <span class="hint-text">(type to search by name or code)</span>
+        <select name="member_employee_ids" id="member-select" multiple>
           ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
         </select>
       </label>
       <div id="route-fields">
-        <label>Destination(s) / Route (hold Ctrl/Cmd to multi-select, in order)
-          <select name="route_location_ids" multiple size="6">
-            ${locations.map((l) => `<option value="${l.location_id}">${l.location_name}</option>`).join("")}
+        <label>Destination(s) / Route <span class="hint-text">(type to search - pick in the order you'll visit them)</span>
+          <select name="route_location_ids" id="route-select" multiple>
+            ${locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
           </select>
         </label>
         <label>Other destination <span class="hint-text">(only if the actual place isn't listed above - e.g. a one-off customer/vendor site, or still to be decided)</span>
@@ -54,6 +54,26 @@ async function renderCreatePass(container) {
       <button type="submit">Submit for Approval</button>
     </form>
   `;
+
+  // Enable type-to-search on the two long-list selects. Choices.js keeps the
+  // underlying <select multiple> in sync as the real source of truth, so the
+  // submit handler below (which reads event.target.member_employee_ids and
+  // .route_location_ids directly) needs no changes at all.
+  const choicesConfig = {
+    removeItemButton: true,
+    searchResultLimit: 30,
+    shouldSort: false, // options already arrive alphabetically sorted from the API
+    placeholderValue: "Type to search...",
+    noResultsText: "No matches",
+    itemSelectText: "",
+  };
+  if (window.Choices) {
+    new window.Choices(document.getElementById("member-select"), choicesConfig);
+    new window.Choices(document.getElementById("route-select"), { ...choicesConfig, placeholderValue: "Type to search locations..." });
+  }
+  // If the Choices.js CDN script hasn't finished loading yet (or failed),
+  // the plain <select multiple> underneath is still fully functional as a
+  // fallback - just without the search box and chip styling.
 
   const categoryButtons = document.querySelectorAll("#pass-category-buttons .choice-btn");
   const categoryHidden = document.getElementById("pass-category-hidden");
