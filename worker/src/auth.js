@@ -70,14 +70,15 @@ export function parseCookies(request) {
 }
 
 export function sessionCookie(token, maxAgeSeconds) {
-  // Secure + HttpOnly + SameSite=None: frontend (Pages) and API (Workers) live on
-  // different domains, so this cookie must be sent cross-site - SameSite=None is
-  // required for that (Strict\/Lax cookies are withheld on cross-site requests).
-  return `session=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${maxAgeSeconds}`;
+  // Secure + HttpOnly + SameSite=Lax: frontend and API are subdomains of the
+  // same registrable domain, so this is a same-site cookie and Lax is the
+  // standard, safest choice. (Switch to SameSite=None if you ever split the
+  // frontend onto a fully different registrable domain.)
+  return `session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
 }
 
 export function clearSessionCookie() {
-  return `session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`;
+  return `session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
 export async function createSession(env, userId, request) {
@@ -91,14 +92,17 @@ export async function createSession(env, userId, request) {
   return { token, expiresAt };
 }
 
-// Resolves the current user from the session cookie, or null.
+// Resolves the current user from the session cookie, or null. Carries
+// default_location_id through so SECURITY logins stationed at one gate can
+// have their movement events auto-tagged with that location without the
+// frontend needing a second round trip.
 export async function getCurrentUser(env, request) {
   const cookies = parseCookies(request);
   const token = cookies["session"];
   if (!token) return null;
 
   const row = await env.DB.prepare(
-    `SELECT s.session_token, s.expires_at, u.user_id, u.username, u.role, u.employee_id, u.status
+    `SELECT s.session_token, s.expires_at, u.user_id, u.username, u.role, u.employee_id, u.status, u.default_location_id
      FROM sessions s JOIN users u ON u.user_id = s.user_id
      WHERE s.session_token = ?`
   ).bind(token).first();
@@ -115,6 +119,7 @@ export async function getCurrentUser(env, request) {
     username: row.username,
     role: row.role,
     employeeId: row.employee_id,
+    defaultLocationId: row.default_location_id,
     sessionToken: row.session_token,
   };
 }

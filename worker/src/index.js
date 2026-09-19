@@ -4,15 +4,17 @@
 
 import { hashPassword, verifyPassword, createSession, getCurrentUser, requireRole, sessionCookie, clearSessionCookie } from "./auth.js";
 import { writeAudit } from "./audit.js";
-import { listEmployees, createEmployee, importEmployees, getEmployeeByBadgeToken } from "./employees.js";
-import { listLocations, createLocation, getLocationByQrToken } from "./locations.js";
-import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken } from "./gatepasses.js";
+import { listEmployees, createEmployee, importEmployees, getEmployeeByBadgeToken, setEmployeeDepartment } from "./employees.js";
+import { listLocations, createLocation, getLocationByQrToken, setLocationStatus, regenerateLocationQr } from "./locations.js";
+import { createGatePass, listGatePasses, getGatePassDetails, getPassByQrToken, deleteGatePass } from "./gatepasses.js";
 import { decidePass, listPendingApprovals } from "./approvals.js";
-import { recordMovementEvent, getLiveStatus } from "./movements.js";
-import { listUsers, createUser, setUserStatus } from "./users.js";
+import { recordMovementEvent, getLiveStatus, resetIncompletePasses } from "./movements.js";
+import { listUsers, createUser, setUserStatus, resetPassword, deleteUser, setUserDefaultLocation } from "./users.js";
+import { getSettings, updateSettings } from "./settings.js";
+import { listDepartments, createDepartment, updateDepartment, setDepartmentStatus } from "./departments.js";
 
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "https://gate-26.pages.dev", // must be a specific origin, not "*", since SameSite=None cookies require credentials support
+  "Access-Control-Allow-Origin": "https://lksys.dpdns.org", // must be a specific origin, not "*", since SameSite=Lax cookies require credentials support
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
@@ -45,7 +47,7 @@ export default {
       if (path === "/api/auth/login" && request.method === "POST") {
         const { username, password } = await request.json();
         const userRow = await env.DB.prepare(
-          `SELECT user_id, username, password_hash, role, employee_id, status FROM users WHERE username = ?`
+          `SELECT user_id, username, password_hash, role, employee_id, status, default_location_id FROM users WHERE username = ?`
         ).bind(username).first();
 
         if (!userRow || userRow.status !== "ACTIVE" || !(await verifyPassword(password, userRow.password_hash))) {
@@ -57,7 +59,14 @@ export default {
         await env.DB.prepare(`UPDATE users SET last_login_at = datetime('now') WHERE user_id = ?`).bind(userRow.user_id).run();
 
         return json(
-          { user_id: userRow.user_id, username: userRow.username, role: userRow.role, employee_id: userRow.employee_id, expires_at: expiresAt },
+          {
+            user_id: userRow.user_id,
+            username: userRow.username,
+            role: userRow.role,
+            employee_id: userRow.employee_id,
+            default_location_id: userRow.default_location_id,
+            expires_at: expiresAt,
+          },
           200,
           { "Set-Cookie": sessionCookie(token, 12 * 60 * 60) }
         );
@@ -93,6 +102,33 @@ export default {
         const { rows } = await request.json(); // pre-parsed on the frontend (PapaParse / SheetJS)
         return json(await importEmployees(env, user, rows, request));
       }
+      const employeeDeptMatch = path.match(/^\/api\/employees\/(\d+)\/department$/);
+      if (employeeDeptMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { department_id } = await request.json();
+        return json(await setEmployeeDepartment(env, user, employeeDeptMatch[1], department_id, request));
+      }
+
+      // ---------- DEPARTMENTS ----------
+      if (path === "/api/departments" && request.method === "GET") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
+        return json(await listDepartments(env));
+      }
+      if (path === "/api/departments" && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await createDepartment(env, user, await request.json(), request));
+      }
+      const departmentMatch = path.match(/^\/api\/departments\/(\d+)$/);
+      if (departmentMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await updateDepartment(env, user, departmentMatch[1], await request.json(), request));
+      }
+      const departmentStatusMatch = path.match(/^\/api\/departments\/(\d+)\/status$/);
+      if (departmentStatusMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { status } = await request.json();
+        return json(await setDepartmentStatus(env, user, departmentStatusMatch[1], status, request));
+      }
 
       // ---------- LOCATIONS ----------
       if (path === "/api/locations" && request.method === "GET") {
@@ -102,6 +138,17 @@ export default {
       if (path === "/api/locations" && request.method === "POST") {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         return json(await createLocation(env, user, await request.json(), request));
+      }
+      const locationStatusMatch = path.match(/^\/api\/locations\/(\d+)\/status$/);
+      if (locationStatusMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { status } = await request.json();
+        return json(await setLocationStatus(env, user, locationStatusMatch[1], status, request));
+      }
+      const locationQrMatch = path.match(/^\/api\/locations\/(\d+)\/regenerate-qr$/);
+      if (locationQrMatch && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await regenerateLocationQr(env, user, locationQrMatch[1], request));
       }
 
       // ---------- GATE PASSES ----------
@@ -118,11 +165,15 @@ export default {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
         return json(await getGatePassDetails(env, passDetailMatch[1]));
       }
+      if (passDetailMatch && request.method === "DELETE") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE"]);
+        return json(await deleteGatePass(env, user, passDetailMatch[1], request));
+      }
 
       // ---------- APPROVALS ----------
       if (path === "/api/approvals/pending" && request.method === "GET") {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD"]);
-        return json(await listPendingApprovals(env));
+        return json(await listPendingApprovals(env, user));
       }
       const decideMatch = path.match(/^\/api\/gatepasses\/(\d+)\/decision$/);
       if (decideMatch && request.method === "POST") {
@@ -140,6 +191,10 @@ export default {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER"]);
         return json(await getLiveStatus(env));
       }
+      if (path === "/api/movements/reset" && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN"]);
+        return json(await resetIncompletePasses(env, user, request));
+      }
 
       // ---------- USER MANAGEMENT ----------
       if (path === "/api/users" && request.method === "GET") {
@@ -155,6 +210,33 @@ export default {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         const { status } = await request.json();
         return json(await setUserStatus(env, user, userStatusMatch[1], status, request));
+      }
+      const userDeleteMatch = path.match(/^\/api\/users\/(\d+)$/);
+      if (userDeleteMatch && request.method === "DELETE") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await deleteUser(env, user, userDeleteMatch[1], request));
+      }
+      const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
+      if (userPasswordMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { new_password } = await request.json();
+        return json(await resetPassword(env, user, userPasswordMatch[1], new_password, request));
+      }
+      const userDefaultLocationMatch = path.match(/^\/api\/users\/(\d+)\/default-location$/);
+      if (userDefaultLocationMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { location_id } = await request.json();
+        return json(await setUserDefaultLocation(env, user, userDefaultLocationMatch[1], location_id, request));
+      }
+
+      // ---------- SETTINGS ----------
+      if (path === "/api/settings" && request.method === "GET") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
+        return json(await getSettings(env));
+      }
+      if (path === "/api/settings" && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN"]);
+        return json(await updateSettings(env, user, await request.json(), request));
       }
 
       // ---------- QR RESOLUTION ----------
