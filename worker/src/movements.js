@@ -10,21 +10,10 @@ const EVENT_TYPES = [
   "GATE_OUT", "LOCATION_IN", "LOCATION_OUT", "EXTERNAL_IN", "EXTERNAL_OUT", "RETURN", "GATE_IN", "CANCELLED",
 ];
 
-// Statuses that mean "this member's part of the pass is done" - no further
-// movement events are expected, and the pass can complete once every member
-// is in one of these.
-const TERMINAL_MEMBER_STATUSES = ["RETURNED", "CANCELLED", "LEFT_FOR_DAY"];
-
-// Maps an event type to the pass_member status it produces. passCategory
-// matters only for GATE_OUT: on a normal MOVEMENT pass, going out just means
-// "currently outside" and a GATE_IN is still expected later. On an
-// EARLY_LEAVE pass (a worker authorized to leave before shift end, with no
-// return expected that day), the same GATE_OUT is the end of the story for
-// that member - there is no return time to wait for, so it goes straight to
-// a terminal status instead of OUTSIDE.
-function memberStatusFor(eventType, passCategory) {
+// Maps an event type to the pass_member status it produces.
+function memberStatusFor(eventType) {
   switch (eventType) {
-    case "GATE_OUT": return passCategory === "EARLY_LEAVE" ? "LEFT_FOR_DAY" : "OUTSIDE";
+    case "GATE_OUT": return "OUTSIDE";
     case "LOCATION_IN": return "AT_INTERNAL_LOCATION";
     case "LOCATION_OUT": return "OUTSIDE";
     case "EXTERNAL_IN": return "AT_EXTERNAL_LOCATION";
@@ -81,11 +70,6 @@ export async function recordMovementEvent(env, user, body, request) {
     err.status = 409;
     throw err;
   }
-  if (pass.pass_category === "EARLY_LEAVE" && event_type === "GATE_IN") {
-    const err = new Error("This is an Early Leave pass with no return expected - there's nothing to gate in.");
-    err.status = 409;
-    throw err;
-  }
 
   const member = await env.DB.prepare(
     `SELECT * FROM pass_members WHERE pass_id = ? AND employee_id = ?`
@@ -95,24 +79,8 @@ export async function recordMovementEvent(env, user, body, request) {
     err.status = 403;
     throw err;
   }
-  if (TERMINAL_MEMBER_STATUSES.includes(member.member_status)) {
+  if (member.member_status === "RETURNED" || member.member_status === "CANCELLED") {
     const err = new Error(`Employee movement already closed (${member.member_status})`);
-    err.status = 409;
-    throw err;
-  }
-
-  // Explicit gate-event transition guard: GATE_OUT/GATE_IN each have exactly
-  // one valid starting state. Without this, member_status === "OUTSIDE" was
-  // never in the terminal-status check above, so a second GATE_OUT (e.g. a
-  // duplicate tap that generated a fresh idempotency key) would sail through,
-  // re-recording the same person as gated out twice on the same pass.
-  if (event_type === "GATE_OUT" && member.member_status !== "PENDING") {
-    const err = new Error(`This person has already been gated out on this pass (status: ${member.member_status}). Use Gate In instead.`);
-    err.status = 409;
-    throw err;
-  }
-  if (event_type === "GATE_IN" && member.member_status === "PENDING") {
-    const err = new Error("This person hasn't been gated out yet on this pass - nothing to gate in.");
     err.status = 409;
     throw err;
   }
@@ -126,7 +94,7 @@ export async function recordMovementEvent(env, user, body, request) {
     return { event_id: dup.event_id, duplicate: true };
   }
 
-  const newMemberStatus = memberStatusFor(event_type, pass.pass_category);
+  const newMemberStatus = memberStatusFor(event_type);
 
   // Atomic batch: insert event + update member status + flip pass to IN_PROGRESS on first GATE_OUT.
   const stmts = [
@@ -157,11 +125,9 @@ export async function recordMovementEvent(env, user, body, request) {
     request,
   });
 
-  // Check whether the whole pass can now be completed (spec section 5: must
-  // NOT close until every member has resolved) - triggered any time this
-  // event just put a member into a terminal state, whether that's a normal
-  // GATE_IN return or a GATE_OUT on an Early Leave pass.
-  if (TERMINAL_MEMBER_STATUSES.includes(newMemberStatus)) {
+  // If this was a GATE_IN, check whether the whole pass can now be completed
+  // (spec section 5: must NOT close until every member has returned).
+  if (event_type === "GATE_IN") {
     await maybeCompletePass(env, pass_id, user, request);
   }
 
@@ -173,7 +139,7 @@ async function maybeCompletePass(env, passId, user, request) {
     `SELECT member_status FROM pass_members WHERE pass_id = ?`
   ).bind(passId).all();
 
-  const allResolved = results.every((m) => TERMINAL_MEMBER_STATUSES.includes(m.member_status));
+  const allResolved = results.every((m) => m.member_status === "RETURNED" || m.member_status === "CANCELLED");
   if (allResolved) {
     await env.DB.prepare(
       `UPDATE gate_passes SET status = 'COMPLETED', updated_at = datetime('now') WHERE pass_id = ?`
@@ -197,7 +163,7 @@ export async function getLiveStatus(env) {
     JOIN employees e ON e.employee_id = pm.employee_id
     JOIN gate_passes gp ON gp.pass_id = pm.pass_id
     WHERE gp.status IN ('APPROVED', 'IN_PROGRESS')
-      AND pm.member_status NOT IN ('RETURNED', 'CANCELLED', 'LEFT_FOR_DAY')
+      AND pm.member_status NOT IN ('RETURNED', 'CANCELLED')
   `).all();
 
   const now = Date.now();
@@ -220,57 +186,4 @@ export async function getLiveStatus(env) {
     overdue: overdueCount,
     details: outside,
   };
-}
-
-// Super Admin "clean slate" tool for the dashboard: forcibly resolves every
-// pass stuck in an unfinished state instead of requiring someone to hunt
-// down and manually close each one.
-//  - PENDING passes (never approved) are marked REJECTED.
-//  - APPROVED / IN_PROGRESS passes have every unresolved member forced to
-//    CANCELLED and the pass itself marked COMPLETED, dropping it off the
-//    live status dashboard. "Unresolved" here uses the same
-//    TERMINAL_MEMBER_STATUSES list above, so an Early Leave member sitting
-//    at LEFT_FOR_DAY is correctly left alone.
-// COMPLETED and REJECTED passes are already resolved and untouched.
-export async function resetIncompletePasses(env, user, request) {
-  const { results: activePasses } = await env.DB.prepare(
-    `SELECT pass_id, status FROM gate_passes WHERE status IN ('PENDING', 'APPROVED', 'IN_PROGRESS')`
-  ).all();
-
-  let rejectedPending = 0;
-  let closedInProgress = 0;
-  let clearedMembers = 0;
-
-  for (const p of activePasses) {
-    if (p.status === "PENDING") {
-      await env.DB.prepare(
-        `UPDATE gate_passes SET status = 'REJECTED', updated_at = datetime('now') WHERE pass_id = ?`
-      ).bind(p.pass_id).run();
-      rejectedPending++;
-      continue;
-    }
-
-    // APPROVED or IN_PROGRESS: force every unresolved member to CANCELLED,
-    // then close the pass out as COMPLETED.
-    const upd = await env.DB.prepare(
-      `UPDATE pass_members SET member_status = 'CANCELLED'
-       WHERE pass_id = ? AND member_status NOT IN ('RETURNED', 'CANCELLED', 'LEFT_FOR_DAY')`
-    ).bind(p.pass_id).run();
-    clearedMembers += upd.meta?.changes || 0;
-
-    await env.DB.prepare(
-      `UPDATE gate_passes SET status = 'COMPLETED', updated_at = datetime('now') WHERE pass_id = ?`
-    ).bind(p.pass_id).run();
-    closedInProgress++;
-  }
-
-  await writeAudit(env, {
-    userId: user.userId,
-    action: "SUPER_ADMIN_RESET_DASHBOARD",
-    recordType: "gate_pass",
-    details: { rejectedPending, closedInProgress, clearedMembers },
-    request,
-  });
-
-  return { rejected_pending: rejectedPending, closed_in_progress: closedInProgress, cleared_members: clearedMembers };
 }
