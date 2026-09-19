@@ -4,6 +4,19 @@
 // resolves directly to pass_id + employee_id; the manual selects here are the
 // fallback / v1 baseline.
 
+// Which member_status values are actually eligible for this action - keeps
+// someone who's already been gated out from showing up (and being pickable
+// again) in the Gate Out list, and vice versa for Gate In. This is the
+// frontend half of the fix; the backend (worker/src/movements.js) also
+// rejects the transition outright, so this is a UX improvement, not the
+// only safety net.
+function eligibleMembersFor(direction, members) {
+  if (direction === "out") {
+    return members.filter((m) => m.member_status === "PENDING");
+  }
+  return members.filter((m) => ["OUTSIDE", "AT_INTERNAL_LOCATION", "AT_EXTERNAL_LOCATION"].includes(m.member_status));
+}
+
 async function renderSecurityGate(container, direction) {
   const eventType = direction === "out" ? "GATE_OUT" : "GATE_IN";
   const passes = await Api.listGatePasses();
@@ -51,10 +64,20 @@ async function renderSecurityGate(container, direction) {
   async function loadMembers() {
     if (!passSelect.value) return;
     const { pass, members } = await Api.getGatePass(passSelect.value);
+    const eligible = eligibleMembersFor(direction, members);
+
+    if (eligible.length === 0) {
+      membersContainer.innerHTML = `<p class="hint-text">Everyone on this pass has already been gated ${direction === "out" ? "out" : "in"}.</p>`;
+      return;
+    }
+
+    // With a single-member pass (the common case) this leaves exactly one
+    // option, pre-selected - scan the pass, hit submit, done. No badge scan
+    // needed, and no way to accidentally re-select someone already resolved.
     membersContainer.innerHTML = `
       <label>Employee
         <select name="employee_id" required>
-          ${members.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("")}
+          ${eligible.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("")}
         </select>
       </label>
     `;
@@ -71,10 +94,18 @@ async function renderSecurityGate(container, direction) {
     errorEl.textContent = "";
 
     const form = new FormData(event.target);
+    const employeeIdRaw = form.get("employee_id");
+    if (!employeeIdRaw) {
+      errorEl.textContent = "There's no one left on this pass eligible for this action.";
+      btn.disabled = false;
+      btn.textContent = `Record Gate ${direction === "out" ? "Out" : "In"}`;
+      return;
+    }
+
     try {
       await Api.recordMovement({
         pass_id: Number(form.get("pass_id")),
-        employee_id: Number(form.get("employee_id")),
+        employee_id: Number(employeeIdRaw),
         event_type: eventType,
         idempotency_key: window.newIdempotencyKey(),
       });

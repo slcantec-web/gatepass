@@ -21,6 +21,24 @@ const MOVEMENT_EVENT_DEFS = [
   { value: "RETURN", label: "Return to Company Location", gate: false },
 ];
 
+// Only members who are actually in a valid starting state for the chosen
+// event show up in the picker. This is what stops someone being gated out
+// (or gated in) a second time from this screen: once they're OUTSIDE, they
+// simply won't appear in the GATE_OUT list any more. Non-gate events are
+// only filtered down to "not already terminal" - the exact state machine
+// for location/external/return is looser and the backend is the real guard
+// there.
+function eligibleMembersFor(eventType, members) {
+  const TERMINAL = ["RETURNED", "CANCELLED", "LEFT_FOR_DAY"];
+  if (eventType === "GATE_OUT") {
+    return members.filter((m) => m.member_status === "PENDING");
+  }
+  if (eventType === "GATE_IN") {
+    return members.filter((m) => ["OUTSIDE", "AT_INTERNAL_LOCATION", "AT_EXTERNAL_LOCATION"].includes(m.member_status));
+  }
+  return members.filter((m) => !TERMINAL.includes(m.member_status));
+}
+
 async function renderMovementCheck(container) {
   const role = window.CurrentUser.role;
   const isEmployee = role === "EMPLOYEE";
@@ -104,6 +122,7 @@ async function renderMovementCheck(container) {
       btn.classList.add("active");
       eventHidden.value = btn.dataset.value;
       applyEventVisibility();
+      loadPassMembers(); // eligible people depend on which event is selected
     });
   });
   applyEventVisibility();
@@ -115,8 +134,15 @@ async function renderMovementCheck(container) {
       return;
     }
     const { pass, members } = await Api.getGatePass(passSelect.value);
+    const eligible = eligibleMembersFor(eventHidden.value, members);
+
+    if (eligible.length === 0) {
+      employeeSelect.innerHTML = `<option value="">-- no one eligible for this event --</option>`;
+      return;
+    }
+
     employeeSelect.innerHTML = `<option value="">-- scan badge or select --</option>` +
-      members.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("");
+      eligible.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("");
   }
   passSelect.addEventListener("change", loadPassMembers);
 
@@ -155,7 +181,7 @@ async function renderMovementCheck(container) {
           }
           const belongs = [...employeeSelect.options].some((o) => o.value === String(resolved.employee.employee_id));
           if (!belongs) {
-            errorEl.textContent = `${resolved.employee.full_name} is not a member of this pass.`;
+            errorEl.textContent = `${resolved.employee.full_name} is not eligible for this event on this pass (already recorded, or not a member).`;
             return;
           }
           employeeSelect.value = resolved.employee.employee_id;
@@ -177,6 +203,13 @@ async function renderMovementCheck(container) {
     const form = new FormData(event.target);
     const eventType = form.get("event_type");
     const def = eventDefs.find((e) => e.value === eventType);
+
+    if (!isEmployee && !form.get("employee_id")) {
+      errorEl.textContent = "There's no one left on this pass eligible for this event.";
+      btn.disabled = false;
+      btn.textContent = "Record Movement";
+      return;
+    }
 
     try {
       await Api.recordMovement({
