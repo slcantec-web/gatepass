@@ -10,6 +10,14 @@
 // A single "Scan QR" button resolves whatever gets scanned - pass, location,
 // or worker badge - via the same GET /api/qr/:token the old screens each
 // called separately, and fills in whichever field it matches.
+//
+// Two shortcuts on top of that:
+//  - If scanning/selecting the pass leaves exactly one person eligible for
+//    the chosen event, that person is auto-selected - no separate badge scan
+//    needed on a single-member pass (the common case).
+//  - If the logged-in Security account has a default_location_id set (see
+//    User Management > Set Default Location), that location is sent along
+//    automatically with gate events, which otherwise carry no location_id.
 
 const MOVEMENT_EVENT_DEFS = [
   { value: "GATE_OUT", label: "Gate Out (Security)", gate: true },
@@ -45,16 +53,22 @@ async function renderMovementCheck(container) {
   const canDoGateEvents = ["SECURITY", "ADMIN", "SUPER_ADMIN"].includes(role);
   const eventDefs = MOVEMENT_EVENT_DEFS.filter((e) => !e.gate || canDoGateEvents);
 
+  // login() returns default_location_id (snake_case); a session restored via
+  // Api.me() -> getCurrentUser() returns defaultLocationId (camelCase) - read
+  // whichever is present so this works right after login and after a refresh.
+  const defaultLocationId = window.CurrentUser.default_location_id ?? window.CurrentUser.defaultLocationId ?? null;
+
   const [allPasses, allLocations] = await Promise.all([Api.listGatePasses(), Api.listLocations()]);
   const relevantPasses = allPasses.filter((p) => p.status === "APPROVED" || p.status === "IN_PROGRESS");
   const activeLocations = allLocations.filter((l) => l.status === "ACTIVE");
+  const defaultLocation = activeLocations.find((l) => String(l.location_id) === String(defaultLocationId)) || null;
 
   container.innerHTML = `
     <h2>Record Movement</h2>
     <p class="hint-text">
       ${isEmployee
         ? "Check yourself in or out of a location on one of your approved passes."
-        : "Scan or select a pass, then a person and an event - covers gate in/out and location check-in/out for anyone on the pass."}
+        : "Scan or select a pass - if only one person on it is eligible for the chosen event, they're picked automatically."}
     </p>
 
     <div class="assisted-scan-row">
@@ -77,7 +91,7 @@ async function renderMovementCheck(container) {
       <input type="hidden" name="event_type" id="movement-event-hidden" value="${eventDefs[0] ? eventDefs[0].value : ""}" />
 
       ${isEmployee ? "" : `
-        <label>Employee <span class="hint-text">(scan their badge, or select)</span>
+        <label>Employee <span class="hint-text">(auto-selected when only one person on the pass is eligible)</span>
           <select name="employee_id" id="movement-employee-select" required>
             <option value="">-- scan badge or select --</option>
           </select>
@@ -87,10 +101,11 @@ async function renderMovementCheck(container) {
       <div id="movement-location-field">
         <label>Location
           <select name="location_id" id="movement-location-select">
-            ${activeLocations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
+            ${activeLocations.map((l) => `<option value="${l.location_id}" ${defaultLocation && l.location_id === defaultLocation.location_id ? "selected" : ""}>${l.location_name} (${l.location_type})</option>`).join("")}
           </select>
         </label>
       </div>
+      ${defaultLocation ? `<p id="gate-location-hint" class="hint-text" style="display:none;">Recording at your assigned location: <strong>${defaultLocation.location_name}</strong></p>` : ""}
 
       <div id="movement-error" class="error-text"></div>
       <button type="submit">Record Movement</button>
@@ -102,6 +117,7 @@ async function renderMovementCheck(container) {
   const eventHidden = document.getElementById("movement-event-hidden");
   const employeeSelect = document.getElementById("movement-employee-select"); // null for EMPLOYEE role
   const locationField = document.getElementById("movement-location-field");
+  const gateLocationHint = document.getElementById("gate-location-hint");
   const errorEl = document.getElementById("movement-error");
   const scanLabel = document.getElementById("movement-scan-label");
 
@@ -109,12 +125,15 @@ async function renderMovementCheck(container) {
     return eventDefs.find((e) => e.value === eventHidden.value);
   }
 
-  // Gate events don't take a location (the gate isn't one of the registered
-  // locations) - hide the field entirely rather than leave a misleading one
-  // sitting there unused.
+  // Gate events don't take a manually-picked location (the gate isn't one of
+  // the registered locations) - hide the picker. If the logged-in account has
+  // a default location, show a hint instead so it's clear it's still being
+  // recorded, just automatically.
   function applyEventVisibility() {
     const def = currentEventDef();
-    locationField.style.display = def && def.gate ? "none" : "";
+    const isGate = !!(def && def.gate);
+    locationField.style.display = isGate ? "none" : "";
+    if (gateLocationHint) gateLocationHint.style.display = isGate ? "block" : "none";
   }
   eventButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -143,6 +162,14 @@ async function renderMovementCheck(container) {
 
     employeeSelect.innerHTML = `<option value="">-- scan badge or select --</option>` +
       eligible.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("");
+
+    // Scanning/selecting the pass already identifies the one person it can
+    // possibly be when there's only one eligible member on it - no need to
+    // also scan or pick their badge separately.
+    if (eligible.length === 1) {
+      employeeSelect.value = eligible[0].employee_id;
+      scanLabel.textContent = `✓ ${eligible[0].emp_code} - ${eligible[0].full_name} (auto-selected)`;
+    }
   }
   passSelect.addEventListener("change", loadPassMembers);
 
@@ -211,11 +238,18 @@ async function renderMovementCheck(container) {
       return;
     }
 
+    // Gate events carry no manually-picked location field, but if this
+    // account has a default location assigned, send that along instead of
+    // leaving the event with no location_id at all.
+    const locationId = def && def.gate
+      ? (defaultLocationId || undefined)
+      : (Number(form.get("location_id")) || undefined);
+
     try {
       await Api.recordMovement({
         pass_id: Number(form.get("pass_id")),
         employee_id: isEmployee ? window.CurrentUser.employeeId : Number(form.get("employee_id")),
-        location_id: def && def.gate ? undefined : (Number(form.get("location_id")) || undefined),
+        location_id: locationId,
         event_type: eventType,
         idempotency_key: window.newIdempotencyKey(),
       });

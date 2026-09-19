@@ -43,6 +43,8 @@ const Api = {
 
   listLocations: () => apiRequest("/locations"),
   createLocation: (loc) => apiRequest("/locations", { method: "POST", body: loc }),
+  setLocationStatus: (id, status) => apiRequest(`/locations/${id}/status`, { method: "PUT", body: { status } }),
+  regenerateLocationQr: (id) => apiRequest(`/locations/${id}/regenerate-qr`, { method: "POST" }),
 
   listGatePasses: () => apiRequest("/gatepasses"),
   createGatePass: (pass) => apiRequest("/gatepasses", { method: "POST", body: pass }),
@@ -71,6 +73,10 @@ const Api = {
   createUser: (u) => apiRequest("/users", { method: "POST", body: u }),
   setUserStatus: (id, status) => apiRequest(`/users/${id}/status`, { method: "PUT", body: { status } }),
   resetPassword: (id, newPassword) => apiRequest(`/users/${id}/password`, { method: "PUT", body: { new_password: newPassword } }),
+  // Sets which location auto-fills on this user's gate movement events (for
+  // SECURITY logins permanently stationed at one gate). Backed by PUT
+  // /api/users/:id/default-location (setUserDefaultLocation) in worker/src/users.js.
+  setUserDefaultLocation: (id, locationId) => apiRequest(`/users/${id}/default-location`, { method: "PUT", body: { location_id: locationId } }),
   // Hard delete - only succeeds if the account has no audit-trail history
   // (no gate passes created, movements recorded, or approvals made). The
   // backend blocks it otherwise and tells you to deactivate instead.

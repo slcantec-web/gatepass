@@ -23,11 +23,11 @@ async function renderCreatePass(container) {
         </select>
       </label>
       <label>Leader (Employee)
-        <select name="leader_employee_id" required>
+        <select name="leader_employee_id" id="leader-select" required>
           ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
         </select>
       </label>
-      <label>Additional Members <span class="hint-text">(type to search by name or code)</span>
+      <label>Additional Members <span class="hint-text">(type to search by name or code - the selected Leader is excluded here since they're already on the pass)</span>
         <select name="member_employee_ids" id="member-select" multiple>
           ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
         </select>
@@ -67,13 +67,53 @@ async function renderCreatePass(container) {
     noResultsText: "No matches",
     itemSelectText: "",
   };
+  let memberChoices = null;
+  let routeChoices = null;
   if (window.Choices) {
-    new window.Choices(document.getElementById("member-select"), choicesConfig);
-    new window.Choices(document.getElementById("route-select"), { ...choicesConfig, placeholderValue: "Type to search locations..." });
+    memberChoices = new window.Choices(document.getElementById("member-select"), choicesConfig);
+    routeChoices = new window.Choices(document.getElementById("route-select"), { ...choicesConfig, placeholderValue: "Type to search locations..." });
   }
   // If the Choices.js CDN script hasn't finished loading yet (or failed),
   // the plain <select multiple> underneath is still fully functional as a
-  // fallback - just without the search box and chip styling.
+  // fallback - just without the search box and chip styling. All the leader-
+  // exclusion logic below handles both cases.
+
+  const leaderSelect = document.getElementById("leader-select");
+  const memberSelectEl = document.getElementById("member-select");
+
+  function employeeChoiceOptions(excludeId) {
+    return employees
+      .filter((e) => String(e.employee_id) !== String(excludeId))
+      .map((e) => ({ value: String(e.employee_id), label: `${e.emp_code} - ${e.full_name}` }));
+  }
+
+  // A gate pass's Leader is automatically a member (see createGatePass on the
+  // backend, which unions leader_employee_id into the member list) - so
+  // letting the same person also be picked in Additional Members is not just
+  // redundant, it's confusing (they'd appear to be "leading themselves" as a
+  // secondary member too). This keeps the Additional Members list always
+  // excluding whoever is currently selected as Leader, and re-syncs it live
+  // whenever the Leader choice changes.
+  function refreshMemberOptions() {
+    const leaderId = leaderSelect.value;
+    if (memberChoices) {
+      const previouslySelected = memberChoices.getValue(true); // array of selected values
+      memberChoices.clearStore();
+      memberChoices.setChoices(employeeChoiceOptions(leaderId), "value", "label", true);
+      // Re-apply whatever was already picked, minus the newly-excluded leader.
+      previouslySelected
+        .filter((v) => String(v) !== String(leaderId))
+        .forEach((v) => memberChoices.setChoiceByValue(v));
+    } else {
+      const previouslySelected = Array.from(memberSelectEl.selectedOptions).map((o) => o.value);
+      memberSelectEl.innerHTML = employees
+        .filter((e) => String(e.employee_id) !== String(leaderId))
+        .map((e) => `<option value="${e.employee_id}" ${previouslySelected.includes(String(e.employee_id)) ? "selected" : ""}>${e.emp_code} - ${e.full_name}</option>`)
+        .join("");
+    }
+  }
+  leaderSelect.addEventListener("change", refreshMemberOptions);
+  refreshMemberOptions(); // apply immediately against whichever employee the Leader select defaults to
 
   const categoryButtons = document.querySelectorAll("#pass-category-buttons .choice-btn");
   const categoryHidden = document.getElementById("pass-category-hidden");
@@ -105,13 +145,19 @@ async function renderCreatePass(container) {
     errorEl.textContent = "";
 
     const form = new FormData(event.target);
-    const memberIds = Array.from(event.target.member_employee_ids.selectedOptions).map((o) => Number(o.value));
+    const leaderId = Number(form.get("leader_employee_id"));
+    // Defensive filter, on top of the options list already excluding the
+    // leader: guards against a stale selection surviving a leader change
+    // when Choices.js isn't loaded and the fallback path was used.
+    const memberIds = Array.from(event.target.member_employee_ids.selectedOptions)
+      .map((o) => Number(o.value))
+      .filter((id) => id !== leaderId);
     const routeIds = Array.from(event.target.route_location_ids.selectedOptions).map((o) => Number(o.value));
 
     try {
       const result = await Api.createGatePass({
         from_location_id: Number(form.get("from_location_id")),
-        leader_employee_id: Number(form.get("leader_employee_id")),
+        leader_employee_id: leaderId,
         member_employee_ids: memberIds,
         route_location_ids: routeIds,
         purpose: form.get("purpose"),
@@ -219,7 +265,7 @@ async function renderPassDetails(container, passId) {
     <h3>Members</h3>
     <table class="data-table">
       <thead><tr><th>Employee</th><th>Status</th></tr></thead>
-      <tbody>${members.map((m) => `<tr><td data-label="Employee">${m.emp_code} - ${m.full_name}</td><td data-label="Status">${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
+      <tbody>${members.map((m) => `<tr><td data-label="Employee">${m.emp_code} - ${m.full_name}${m.employee_id === pass.leader_employee_id ? ` <span class="badge">Leader</span>` : ""}</td><td data-label="Status">${formatMemberStatus(pass.status, m.member_status)}</td></tr>`).join("")}</tbody>
     </table>
     <h3>Route</h3>
     <ol>${route.map((r) => `<li>${r.location_name}</li>`).join("")}</ol>
@@ -333,7 +379,7 @@ function printPassSlip(pass, members, route, settings) {
         <h3>Members</h3>
         <table>
           <thead><tr><th>Emp Code</th><th>Name</th></tr></thead>
-          <tbody>${members.map((m) => `<tr><td>${m.emp_code}</td><td>${m.full_name}</td></tr>`).join("")}</tbody>
+          <tbody>${members.map((m) => `<tr><td>${m.emp_code}</td><td>${m.full_name}${m.employee_id === pass.leader_employee_id ? " (Leader)" : ""}</td></tr>`).join("")}</tbody>
         </table>
 
         <h3>Route</h3>

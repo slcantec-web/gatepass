@@ -2,7 +2,8 @@
 const USER_ROLES = ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE", "SECURITY", "MANAGEMENT_VIEWER"];
 
 async function renderUserManagement(container) {
-  const [users, employees] = await Promise.all([Api.listUsers(), Api.listEmployees()]);
+  const [users, employees, locations] = await Promise.all([Api.listUsers(), Api.listEmployees(), Api.listLocations()]);
+  const activeLocations = locations.filter((l) => l.status === "ACTIVE");
 
   container.innerHTML = `
     <h2>User Management</h2>
@@ -16,11 +17,16 @@ async function renderUserManagement(container) {
         <option value="">(no linked employee)</option>
         ${employees.map((e) => `<option value="${e.employee_id}">${e.emp_code} - ${e.full_name}</option>`).join("")}
       </select>
+      <select name="default_location_id">
+        <option value="">(no default location)</option>
+        ${activeLocations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
+      </select>
       <button type="submit">Add User</button>
     </form>
+    <p class="hint-text">Default location matters mainly for Security logins - it's what gets recorded automatically on Gate In/Out events at that person's station, without an extra scan.</p>
     <div id="add-user-error" class="error-text"></div>
     <table class="data-table">
-      <thead><tr><th>Username</th><th>Role</th><th>Employee</th><th>Department</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
+      <thead><tr><th>Username</th><th>Role</th><th>Employee</th><th>Department</th><th>Default Location</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
       <tbody>
         ${users.map((u) => `
           <tr>
@@ -28,6 +34,7 @@ async function renderUserManagement(container) {
             <td data-label="Role">${u.role}</td>
             <td data-label="Employee">${u.employee_name || "-"}</td>
             <td data-label="Department">${u.department_name || (u.role === "HOD" ? `<span class="hint-text">Set via Employee Master</span>` : "-")}</td>
+            <td data-label="Default Location">${u.default_location_name || `<span class="hint-text">Not set</span>`}</td>
             <td data-label="Status">${u.status}</td>
             <td data-label="Last Login">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
             <td>
@@ -35,6 +42,7 @@ async function renderUserManagement(container) {
                 ${u.status === "ACTIVE" ? "Deactivate" : "Activate"}
               </button>
               <button class="btn-link btn-reset-password" data-user-id="${u.user_id}" data-username="${u.username}">Reset Password</button>
+              <button class="btn-link btn-set-location" data-user-id="${u.user_id}" data-username="${u.username}" data-location-id="${u.default_location_id || ""}">Set Default Location</button>
               ${u.user_id !== window.CurrentUser.userId ? `<button class="btn-link btn-delete-user" data-user-id="${u.user_id}" data-username="${u.username}" style="color: var(--danger);">Delete</button>` : ""}
             </td>
           </tr>
@@ -42,6 +50,7 @@ async function renderUserManagement(container) {
       </tbody>
     </table>
     <div id="reset-password-panel"></div>
+    <div id="set-location-panel"></div>
   `;
 
   document.getElementById("add-user-form").addEventListener("submit", async (event) => {
@@ -55,6 +64,7 @@ async function renderUserManagement(container) {
         password: form.get("password"),
         role: form.get("role"),
         employee_id: form.get("employee_id") ? Number(form.get("employee_id")) : null,
+        default_location_id: form.get("default_location_id") ? Number(form.get("default_location_id")) : null,
       });
       renderUserManagement(container);
     } catch (err) {
@@ -98,6 +108,43 @@ async function renderUserManagement(container) {
         try {
           await Api.resetPassword(btn.dataset.userId, newPassword);
           panel.innerHTML = `<p style="color: var(--success); font-weight: 600;">Password updated for ${btn.dataset.username}. They'll need to log in again with the new password.</p>`;
+        } catch (err) {
+          errorEl.textContent = err.message;
+        }
+      });
+    });
+  });
+
+  // Lets you assign or change a Security (or any) login's default location
+  // after the fact - e.g. reassigning a guard to a different gate - without
+  // needing to recreate the account.
+  container.querySelectorAll(".btn-set-location").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const panel = document.getElementById("set-location-panel");
+      panel.innerHTML = `
+        <form id="set-location-form" class="inline-form">
+          <span>Default location for <strong>${btn.dataset.username}</strong>:</span>
+          <select name="location_id">
+            <option value="">(no default location)</option>
+            ${activeLocations.map((l) => `<option value="${l.location_id}" ${String(l.location_id) === btn.dataset.locationId ? "selected" : ""}>${l.location_name} (${l.location_type})</option>`).join("")}
+          </select>
+          <button type="submit">Save</button>
+          <button type="button" id="cancel-set-location" class="btn-secondary">Cancel</button>
+        </form>
+        <div id="set-location-error" class="error-text"></div>
+      `;
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      document.getElementById("cancel-set-location").addEventListener("click", () => { panel.innerHTML = ""; });
+
+      document.getElementById("set-location-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById("set-location-error");
+        errorEl.textContent = "";
+        const val = new FormData(event.target).get("location_id");
+        try {
+          await Api.setUserDefaultLocation(btn.dataset.userId, val ? Number(val) : null);
+          renderUserManagement(container);
         } catch (err) {
           errorEl.textContent = err.message;
         }
