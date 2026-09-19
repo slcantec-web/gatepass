@@ -101,6 +101,22 @@ export async function recordMovementEvent(env, user, body, request) {
     throw err;
   }
 
+  // Explicit gate-event transition guard: GATE_OUT/GATE_IN each have exactly
+  // one valid starting state. Without this, member_status === "OUTSIDE" was
+  // never in the terminal-status check above, so a second GATE_OUT (e.g. a
+  // duplicate tap that generated a fresh idempotency key) would sail through,
+  // re-recording the same person as gated out twice on the same pass.
+  if (event_type === "GATE_OUT" && member.member_status !== "PENDING") {
+    const err = new Error(`This person has already been gated out on this pass (status: ${member.member_status}). Use Gate In instead.`);
+    err.status = 409;
+    throw err;
+  }
+  if (event_type === "GATE_IN" && member.member_status === "PENDING") {
+    const err = new Error("This person hasn't been gated out yet on this pass - nothing to gate in.");
+    err.status = 409;
+    throw err;
+  }
+
   // Duplicate check (level 2 - Worker API). Level 3 (DB UNIQUE constraint) is the real backstop.
   const dup = await env.DB.prepare(
     `SELECT event_id FROM movement_events WHERE pass_id = ? AND employee_id = ? AND event_type = ? AND idempotency_key = ?`
