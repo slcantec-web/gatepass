@@ -4,7 +4,6 @@
 // interactive transactions over HTTP the way a normal SQL client would,
 // but env.DB.batch() runs the statements atomically as a single unit,
 // which is what we use for the "create event + update state + audit" step.
-
 import { writeAudit } from "./audit.js";
 
 const EVENT_TYPES = [
@@ -98,6 +97,22 @@ export async function recordMovementEvent(env, user, body, request) {
   }
   if (TERMINAL_MEMBER_STATUSES.includes(member.member_status)) {
     const err = new Error(`Employee movement already closed (${member.member_status})`);
+    err.status = 409;
+    throw err;
+  }
+
+  // Explicit gate-event transition guard: GATE_OUT/GATE_IN each have exactly
+  // one valid starting state. Without this, member_status === "OUTSIDE" was
+  // never in the terminal-status check above, so a second GATE_OUT (e.g. a
+  // duplicate tap that generated a fresh idempotency key) would sail through,
+  // re-recording the same person as gated out twice on the same pass.
+  if (event_type === "GATE_OUT" && member.member_status !== "PENDING") {
+    const err = new Error(`This person has already been gated out on this pass (status: ${member.member_status}). Use Gate In instead.`);
+    err.status = 409;
+    throw err;
+  }
+  if (event_type === "GATE_IN" && member.member_status === "PENDING") {
+    const err = new Error("This person hasn't been gated out yet on this pass - nothing to gate in.");
     err.status = 409;
     throw err;
   }
@@ -205,4 +220,57 @@ export async function getLiveStatus(env) {
     overdue: overdueCount,
     details: outside,
   };
+}
+
+// Super Admin "clean slate" tool for the dashboard: forcibly resolves every
+// pass stuck in an unfinished state instead of requiring someone to hunt
+// down and manually close each one.
+//  - PENDING passes (never approved) are marked REJECTED.
+//  - APPROVED / IN_PROGRESS passes have every unresolved member forced to
+//    CANCELLED and the pass itself marked COMPLETED, dropping it off the
+//    live status dashboard. "Unresolved" here uses the same
+//    TERMINAL_MEMBER_STATUSES list above, so an Early Leave member sitting
+//    at LEFT_FOR_DAY is correctly left alone.
+// COMPLETED and REJECTED passes are already resolved and untouched.
+export async function resetIncompletePasses(env, user, request) {
+  const { results: activePasses } = await env.DB.prepare(
+    `SELECT pass_id, status FROM gate_passes WHERE status IN ('PENDING', 'APPROVED', 'IN_PROGRESS')`
+  ).all();
+
+  let rejectedPending = 0;
+  let closedInProgress = 0;
+  let clearedMembers = 0;
+
+  for (const p of activePasses) {
+    if (p.status === "PENDING") {
+      await env.DB.prepare(
+        `UPDATE gate_passes SET status = 'REJECTED', updated_at = datetime('now') WHERE pass_id = ?`
+      ).bind(p.pass_id).run();
+      rejectedPending++;
+      continue;
+    }
+
+    // APPROVED or IN_PROGRESS: force every unresolved member to CANCELLED,
+    // then close the pass out as COMPLETED.
+    const upd = await env.DB.prepare(
+      `UPDATE pass_members SET member_status = 'CANCELLED'
+       WHERE pass_id = ? AND member_status NOT IN ('RETURNED', 'CANCELLED', 'LEFT_FOR_DAY')`
+    ).bind(p.pass_id).run();
+    clearedMembers += upd.meta?.changes || 0;
+
+    await env.DB.prepare(
+      `UPDATE gate_passes SET status = 'COMPLETED', updated_at = datetime('now') WHERE pass_id = ?`
+    ).bind(p.pass_id).run();
+    closedInProgress++;
+  }
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "SUPER_ADMIN_RESET_DASHBOARD",
+    recordType: "gate_pass",
+    details: { rejectedPending, closedInProgress, clearedMembers },
+    request,
+  });
+
+  return { rejected_pending: rejectedPending, closed_in_progress: closedInProgress, cleared_members: clearedMembers };
 }
