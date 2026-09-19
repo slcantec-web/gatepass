@@ -168,10 +168,50 @@ async function writeAudit(env, { userId, action, recordType, recordId, details, 
 
 async function listEmployees(env) {
   const { results } = await env.DB.prepare(
-    `SELECT employee_id, emp_code, full_name, department_id, hod_employee_id, designation, phone, email, status, badge_qr_token
-     FROM employees ORDER BY full_name`
+    `SELECT e.employee_id, e.emp_code, e.full_name, e.department_id, d.department_name, e.hod_employee_id, e.designation, e.phone, e.email, e.status, e.badge_qr_token
+     FROM employees e LEFT JOIN departments d ON d.department_id = e.department_id
+     ORDER BY e.full_name`
   ).all();
   return results;
+}
+
+// Assigns/changes which department an existing employee belongs to. Split out
+// as its own small endpoint (same pattern as /status, /password elsewhere)
+// rather than a full "edit employee" form, since department is the one field
+// that needs to be correctable after the fact - HOD approval scoping and the
+// department roster both depend on every employee actually having one set.
+async function setEmployeeDepartment(env, user, employeeId, departmentId, request) {
+  const employee = await env.DB.prepare(`SELECT employee_id, full_name FROM employees WHERE employee_id = ?`)
+    .bind(employeeId).first();
+  if (!employee) {
+    const err = new Error("Employee not found");
+    err.status = 404;
+    throw err;
+  }
+
+  if (departmentId != null) {
+    const dept = await env.DB.prepare(`SELECT department_id FROM departments WHERE department_id = ?`)
+      .bind(departmentId).first();
+    if (!dept) {
+      const err = new Error("Department not found");
+      err.status = 404;
+      throw err;
+    }
+  }
+
+  await env.DB.prepare(`UPDATE employees SET department_id = ?, updated_at = datetime('now') WHERE employee_id = ?`)
+    .bind(departmentId ?? null, employeeId).run();
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "ADMIN_UPDATED_EMPLOYEE_DEPARTMENT",
+    recordType: "employee",
+    recordId: employeeId,
+    details: { full_name: employee.full_name, department_id: departmentId ?? null },
+    request,
+  });
+
+  return { employee_id: Number(employeeId), department_id: departmentId ?? null };
 }
 
 async function createEmployee(env, user, body, request) {
@@ -249,6 +289,139 @@ async function getEmployeeByBadgeToken(env, token) {
   return env.DB.prepare(
     `SELECT employee_id, emp_code, full_name, status FROM employees WHERE badge_qr_token = ? AND status = 'ACTIVE'`
   ).bind(token).first();
+}
+
+
+/* ---- from departments.js ---- */
+// worker/src/departments.js
+// Department Master. Departments already existed in the schema (employees
+// and users have carried department_id/hod_employee_id from the start) but
+// never had a dedicated management screen - HOD-scoped approvals depend on
+// this data being complete and correct, so it needs to be first-class and
+// editable, not just something admins insert manually into D1.
+
+async function listDepartments(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT d.department_id, d.company_id, d.department_code, d.department_name, d.status,
+            d.hod_employee_id, e.full_name AS hod_name,
+            (SELECT COUNT(*) FROM employees emp WHERE emp.department_id = d.department_id AND emp.status = 'ACTIVE') AS employee_count
+     FROM departments d LEFT JOIN employees e ON e.employee_id = d.hod_employee_id
+     ORDER BY d.department_name`
+  ).all();
+  return results;
+}
+
+async function createDepartment(env, user, body, request) {
+  const { department_code, department_name, hod_employee_id, company_id } = body;
+  if (!department_code || !department_name) {
+    const err = new Error("department_code and department_name are required");
+    err.status = 400;
+    throw err;
+  }
+
+  const existing = await env.DB.prepare(
+    `SELECT department_id FROM departments WHERE department_code = ? AND (company_id IS ? OR company_id = ?)`
+  ).bind(department_code, company_id ?? null, company_id ?? null).first();
+  if (existing) {
+    const err = new Error(`${department_code} already exists`);
+    err.status = 409;
+    throw err;
+  }
+
+  const result = await env.DB.prepare(
+    `INSERT INTO departments (company_id, department_code, department_name, hod_employee_id) VALUES (?, ?, ?, ?)`
+  ).bind(company_id ?? 1, department_code, department_name, hod_employee_id ?? null).run();
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "ADMIN_CREATED_DEPARTMENT",
+    recordType: "department",
+    recordId: result.meta.last_row_id,
+    details: { department_code, department_name },
+    request,
+  });
+
+  return { department_id: result.meta.last_row_id };
+}
+
+// Editable: name and who heads it. department_code is left alone once set -
+// changing a code silently would be confusing anywhere it's referenced in
+// history/audit text, so treat it as immutable and have people create a new
+// department instead if a code was genuinely wrong.
+async function updateDepartment(env, user, departmentId, body, request) {
+  const { department_name, hod_employee_id } = body;
+
+  const department = await env.DB.prepare(`SELECT department_id FROM departments WHERE department_id = ?`)
+    .bind(departmentId).first();
+  if (!department) {
+    const err = new Error("Department not found");
+    err.status = 404;
+    throw err;
+  }
+  if (!department_name) {
+    const err = new Error("department_name is required");
+    err.status = 400;
+    throw err;
+  }
+
+  await env.DB.prepare(`UPDATE departments SET department_name = ?, hod_employee_id = ? WHERE department_id = ?`)
+    .bind(department_name, hod_employee_id ?? null, departmentId).run();
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "ADMIN_UPDATED_DEPARTMENT",
+    recordType: "department",
+    recordId: departmentId,
+    details: { department_name, hod_employee_id: hod_employee_id ?? null },
+    request,
+  });
+
+  return { department_id: Number(departmentId) };
+}
+
+// Soft delete (status -> INACTIVE), same reasoning as locations: employees
+// reference departments by department_id, so a real DELETE risks either an
+// FK failure or silently orphaning people's department assignment. Blocked
+// if active employees are still assigned, so you can't "delete" a department
+// out from under a staffed team by mistake.
+async function setDepartmentStatus(env, user, departmentId, status, request) {
+  if (!["ACTIVE", "INACTIVE"].includes(status)) {
+    const err = new Error("status must be ACTIVE or INACTIVE");
+    err.status = 400;
+    throw err;
+  }
+
+  const department = await env.DB.prepare(`SELECT department_id, department_name FROM departments WHERE department_id = ?`)
+    .bind(departmentId).first();
+  if (!department) {
+    const err = new Error("Department not found");
+    err.status = 404;
+    throw err;
+  }
+
+  if (status === "INACTIVE") {
+    const staffed = await env.DB.prepare(
+      `SELECT COUNT(*) AS c FROM employees WHERE department_id = ? AND status = 'ACTIVE'`
+    ).bind(departmentId).first();
+    if ((staffed?.c ?? 0) > 0) {
+      const err = new Error(`Cannot delete: ${staffed.c} active employee(s) are still assigned to this department`);
+      err.status = 409;
+      throw err;
+    }
+  }
+
+  await env.DB.prepare(`UPDATE departments SET status = ? WHERE department_id = ?`).bind(status, departmentId).run();
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: status === "ACTIVE" ? "ADMIN_RESTORED_DEPARTMENT" : "ADMIN_DELETED_DEPARTMENT",
+    recordType: "department",
+    recordId: departmentId,
+    details: { department_name: department.department_name },
+    request,
+  });
+
+  return { department_id: Number(departmentId), status };
 }
 
 
@@ -422,18 +595,25 @@ async function nextPassNumber(env) {
   return `${prefix}${seq}`;
 }
 
+const PASS_CATEGORIES = ["MOVEMENT", "EARLY_LEAVE"];
+
 // body: { leader_employee_id, from_location_id, purpose, expected_departure, expected_return,
-//         member_employee_ids: [...], route_location_ids: [...], destination_note }
+//         member_employee_ids: [...], route_location_ids: [...], destination_note, pass_category }
 async function createGatePass(env, user, body, request) {
   const {
     leader_employee_id, from_location_id, purpose,
     expected_departure, expected_return,
     member_employee_ids = [], route_location_ids = [],
-    destination_note,
+    destination_note, pass_category = "MOVEMENT",
   } = body;
 
   if (!leader_employee_id || !from_location_id || !purpose) {
     const err = new Error("leader_employee_id, from_location_id and purpose are required");
+    err.status = 400;
+    throw err;
+  }
+  if (!PASS_CATEGORIES.includes(pass_category)) {
+    const err = new Error(`pass_category must be one of: ${PASS_CATEGORIES.join(", ")}`);
     err.status = 400;
     throw err;
   }
@@ -445,6 +625,10 @@ async function createGatePass(env, user, body, request) {
   // required foreign key and can't reference something that doesn't exist.
   const trimmedNote = destination_note ? String(destination_note).trim() : null;
 
+  // EARLY_LEAVE passes are one-way by definition - there's no return time to
+  // record, so don't persist a stray expected_return even if the client sent one.
+  const effectiveExpectedReturn = pass_category === "EARLY_LEAVE" ? null : (expected_return ?? null);
+
   // Leader is always a member too.
   const allMembers = Array.from(new Set([leader_employee_id, ...member_employee_ids]));
   const passNumber = await nextPassNumber(env);
@@ -452,9 +636,9 @@ async function createGatePass(env, user, body, request) {
   const passType = allMembers.length > 1 ? "GROUP" : "SINGLE";
 
   const passResult = await env.DB.prepare(
-    `INSERT INTO gate_passes (pass_number, leader_employee_id, from_location_id, purpose, destination_note, expected_departure, expected_return, pass_type, status, qr_code_token, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`
-  ).bind(passNumber, leader_employee_id, from_location_id, purpose, trimmedNote || null, expected_departure ?? null, expected_return ?? null, passType, qrToken, user.userId).run();
+    `INSERT INTO gate_passes (pass_number, leader_employee_id, from_location_id, purpose, destination_note, pass_category, expected_departure, expected_return, pass_type, status, qr_code_token, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`
+  ).bind(passNumber, leader_employee_id, from_location_id, purpose, trimmedNote || null, pass_category, expected_departure ?? null, effectiveExpectedReturn, passType, qrToken, user.userId).run();
 
   const passId = passResult.meta.last_row_id;
 
@@ -501,7 +685,7 @@ async function listGatePasses(env, user) {
   // Employees see only their own passes (as leader or member); HOD/Admin/Management see all.
   if (["EMPLOYEE"].includes(user.role)) {
     const { results } = await env.DB.prepare(
-      `SELECT DISTINCT gp.pass_id, gp.pass_number, gp.purpose, gp.status, gp.created_at
+      `SELECT DISTINCT gp.pass_id, gp.pass_number, gp.purpose, gp.status, gp.pass_category, gp.created_at, gp.leader_employee_id
        FROM gate_passes gp
        LEFT JOIN pass_members pm ON pm.pass_id = gp.pass_id
        WHERE gp.leader_employee_id = ? OR pm.employee_id = ?
@@ -510,8 +694,13 @@ async function listGatePasses(env, user) {
     return results;
   }
 
+  // Admin / HOD / Security / Management Viewer: full gate pass history, with
+  // the leader's name so it reads as a real history list rather than just IDs.
   const { results } = await env.DB.prepare(
-    `SELECT pass_id, pass_number, purpose, status, created_at FROM gate_passes ORDER BY created_at DESC LIMIT 200`
+    `SELECT gp.pass_id, gp.pass_number, gp.purpose, gp.status, gp.pass_category, gp.created_at, gp.leader_employee_id, e.full_name AS leader_name
+     FROM gate_passes gp
+     JOIN employees e ON e.employee_id = gp.leader_employee_id
+     ORDER BY gp.created_at DESC LIMIT 200`
   ).all();
   return results;
 }
@@ -547,6 +736,58 @@ async function getGatePassDetails(env, passId) {
   return { pass, members, route, events };
 }
 
+// Delete a gate pass and all its child rows (pass_members, pass_routes,
+// movement_events, approvals). Two paths in:
+//  - The pass LEADER can delete their OWN pass, but only while it's PENDING
+//    or REJECTED - i.e. before any movement has actually happened.
+//  - A SUPER_ADMIN can delete ANY pass that isn't COMPLETED, to clean up
+//    stuck/abandoned/mis-created passes.
+// COMPLETED passes can never be deleted by anyone - that's the permanent
+// movement record and it stays in the audit trail.
+async function deleteGatePass(env, user, passId, request) {
+  const pass = await env.DB.prepare(`SELECT * FROM gate_passes WHERE pass_id = ?`).bind(passId).first();
+  if (!pass) {
+    const err = new Error("Pass not found");
+    err.status = 404;
+    throw err;
+  }
+
+  if (pass.status === "COMPLETED") {
+    const err = new Error("Completed gate passes cannot be deleted");
+    err.status = 409;
+    throw err;
+  }
+
+  const isOwner = pass.leader_employee_id === user.employeeId;
+  const isSuperAdmin = user.role === "SUPER_ADMIN";
+  const ownerCanDelete = isOwner && ["PENDING", "REJECTED"].includes(pass.status);
+
+  if (!isSuperAdmin && !ownerCanDelete) {
+    const err = new Error("You can only delete your own pass before it has moved (Pending or Rejected), or ask a Super Admin");
+    err.status = 403;
+    throw err;
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM movement_events WHERE pass_id = ?`).bind(passId),
+    env.DB.prepare(`DELETE FROM approvals WHERE pass_id = ?`).bind(passId),
+    env.DB.prepare(`DELETE FROM pass_members WHERE pass_id = ?`).bind(passId),
+    env.DB.prepare(`DELETE FROM pass_routes WHERE pass_id = ?`).bind(passId),
+    env.DB.prepare(`DELETE FROM gate_passes WHERE pass_id = ?`).bind(passId),
+  ]);
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: isSuperAdmin && !ownerCanDelete ? "SUPER_ADMIN_DELETED_PASS" : "USER_DELETED_OWN_PASS",
+    recordType: "gate_pass",
+    recordId: passId,
+    details: { pass_number: pass.pass_number, previous_status: pass.status },
+    request,
+  });
+
+  return { deleted: true, pass_id: Number(passId) };
+}
+
 
 /* ---- from approvals.js ---- */
 // worker/src/approvals.js
@@ -570,6 +811,23 @@ async function decidePass(env, user, passId, decision, comments, request) {
     throw err;
   }
 
+  // A HOD may only decide on passes led by someone in their own department.
+  // SUPER_ADMIN/ADMIN bypass this and can approve anything. This is enforced
+  // here (not just by filtering what the HOD's approvals list shows) so a
+  // HOD can't approve an out-of-department pass by calling the API directly
+  // with a pass_id they weren't shown.
+  if (user.role === "HOD") {
+    const [hodEmployee, leader] = await Promise.all([
+      env.DB.prepare(`SELECT department_id FROM employees WHERE employee_id = ?`).bind(user.employeeId).first(),
+      env.DB.prepare(`SELECT department_id FROM employees WHERE employee_id = ?`).bind(pass.leader_employee_id).first(),
+    ]);
+    if (!hodEmployee?.department_id || !leader?.department_id || hodEmployee.department_id !== leader.department_id) {
+      const err = new Error("You can only approve gate passes for your own department");
+      err.status = 403;
+      throw err;
+    }
+  }
+
   await env.DB.prepare(
     `INSERT INTO approvals (pass_id, approver_id, decision, comments) VALUES (?, ?, ?, ?)`
   ).bind(passId, user.userId, decision, comments ?? null).run();
@@ -591,12 +849,27 @@ async function decidePass(env, user, passId, decision, comments, request) {
   return { pass_id: passId, status: newStatus };
 }
 
-async function listPendingApprovals(env) {
-  const { results } = await env.DB.prepare(
-    `SELECT gp.pass_id, gp.pass_number, gp.purpose, gp.created_at, e.full_name AS leader_name
-     FROM gate_passes gp JOIN employees e ON e.employee_id = gp.leader_employee_id
-     WHERE gp.status = 'PENDING' ORDER BY gp.created_at`
-  ).all();
+// SUPER_ADMIN/ADMIN see every pending pass. A HOD only sees passes led by
+// someone in their own department (looked up from their own linked employee
+// record) - and if that HOD's employee record has no department set, they
+// see nothing rather than everything: fail closed, not open.
+async function listPendingApprovals(env, user) {
+  let departmentFilter = null;
+  if (user.role === "HOD") {
+    const hodEmployee = await env.DB.prepare(`SELECT department_id FROM employees WHERE employee_id = ?`)
+      .bind(user.employeeId).first();
+    departmentFilter = hodEmployee?.department_id ?? null;
+    if (!departmentFilter) return [];
+  }
+
+  const query = `SELECT gp.pass_id, gp.pass_number, gp.purpose, gp.created_at, e.full_name AS leader_name, d.department_name AS leader_department
+                 FROM gate_passes gp
+                 JOIN employees e ON e.employee_id = gp.leader_employee_id
+                 LEFT JOIN departments d ON d.department_id = e.department_id
+                 WHERE gp.status = 'PENDING' ${departmentFilter ? "AND e.department_id = ?" : ""}
+                 ORDER BY gp.created_at`;
+  const stmt = departmentFilter ? env.DB.prepare(query).bind(departmentFilter) : env.DB.prepare(query);
+  const { results } = await stmt.all();
   return results;
 }
 
@@ -613,10 +886,21 @@ const EVENT_TYPES = [
   "GATE_OUT", "LOCATION_IN", "LOCATION_OUT", "EXTERNAL_IN", "EXTERNAL_OUT", "RETURN", "GATE_IN", "CANCELLED",
 ];
 
-// Maps an event type to the pass_member status it produces.
-function memberStatusFor(eventType) {
+// Statuses that mean "this member's part of the pass is done" - no further
+// movement events are expected, and the pass can complete once every member
+// is in one of these.
+const TERMINAL_MEMBER_STATUSES = ["RETURNED", "CANCELLED", "LEFT_FOR_DAY"];
+
+// Maps an event type to the pass_member status it produces. passCategory
+// matters only for GATE_OUT: on a normal MOVEMENT pass, going out just means
+// "currently outside" and a GATE_IN is still expected later. On an
+// EARLY_LEAVE pass (a worker authorized to leave before shift end, with no
+// return expected that day), the same GATE_OUT is the end of the story for
+// that member - there is no return time to wait for, so it goes straight to
+// a terminal status instead of OUTSIDE.
+function memberStatusFor(eventType, passCategory) {
   switch (eventType) {
-    case "GATE_OUT": return "OUTSIDE";
+    case "GATE_OUT": return passCategory === "EARLY_LEAVE" ? "LEFT_FOR_DAY" : "OUTSIDE";
     case "LOCATION_IN": return "AT_INTERNAL_LOCATION";
     case "LOCATION_OUT": return "OUTSIDE";
     case "EXTERNAL_IN": return "AT_EXTERNAL_LOCATION";
@@ -673,6 +957,11 @@ async function recordMovementEvent(env, user, body, request) {
     err.status = 409;
     throw err;
   }
+  if (pass.pass_category === "EARLY_LEAVE" && event_type === "GATE_IN") {
+    const err = new Error("This is an Early Leave pass with no return expected - there's nothing to gate in.");
+    err.status = 409;
+    throw err;
+  }
 
   const member = await env.DB.prepare(
     `SELECT * FROM pass_members WHERE pass_id = ? AND employee_id = ?`
@@ -682,8 +971,24 @@ async function recordMovementEvent(env, user, body, request) {
     err.status = 403;
     throw err;
   }
-  if (member.member_status === "RETURNED" || member.member_status === "CANCELLED") {
+  if (TERMINAL_MEMBER_STATUSES.includes(member.member_status)) {
     const err = new Error(`Employee movement already closed (${member.member_status})`);
+    err.status = 409;
+    throw err;
+  }
+
+  // Explicit gate-event transition guard: GATE_OUT/GATE_IN each have exactly
+  // one valid starting state. Without this, member_status === "OUTSIDE" was
+  // never in the terminal-status check above, so a second GATE_OUT (e.g. a
+  // duplicate tap that generated a fresh idempotency key) would sail through,
+  // re-recording the same person as gated out twice on the same pass.
+  if (event_type === "GATE_OUT" && member.member_status !== "PENDING") {
+    const err = new Error(`This person has already been gated out on this pass (status: ${member.member_status}). Use Gate In instead.`);
+    err.status = 409;
+    throw err;
+  }
+  if (event_type === "GATE_IN" && member.member_status === "PENDING") {
+    const err = new Error("This person hasn't been gated out yet on this pass - nothing to gate in.");
     err.status = 409;
     throw err;
   }
@@ -697,7 +1002,7 @@ async function recordMovementEvent(env, user, body, request) {
     return { event_id: dup.event_id, duplicate: true };
   }
 
-  const newMemberStatus = memberStatusFor(event_type);
+  const newMemberStatus = memberStatusFor(event_type, pass.pass_category);
 
   // Atomic batch: insert event + update member status + flip pass to IN_PROGRESS on first GATE_OUT.
   const stmts = [
@@ -728,9 +1033,11 @@ async function recordMovementEvent(env, user, body, request) {
     request,
   });
 
-  // If this was a GATE_IN, check whether the whole pass can now be completed
-  // (spec section 5: must NOT close until every member has returned).
-  if (event_type === "GATE_IN") {
+  // Check whether the whole pass can now be completed (spec section 5: must
+  // NOT close until every member has resolved) - triggered any time this
+  // event just put a member into a terminal state, whether that's a normal
+  // GATE_IN return or a GATE_OUT on an Early Leave pass.
+  if (TERMINAL_MEMBER_STATUSES.includes(newMemberStatus)) {
     await maybeCompletePass(env, pass_id, user, request);
   }
 
@@ -742,7 +1049,7 @@ async function maybeCompletePass(env, passId, user, request) {
     `SELECT member_status FROM pass_members WHERE pass_id = ?`
   ).bind(passId).all();
 
-  const allResolved = results.every((m) => m.member_status === "RETURNED" || m.member_status === "CANCELLED");
+  const allResolved = results.every((m) => TERMINAL_MEMBER_STATUSES.includes(m.member_status));
   if (allResolved) {
     await env.DB.prepare(
       `UPDATE gate_passes SET status = 'COMPLETED', updated_at = datetime('now') WHERE pass_id = ?`
@@ -766,7 +1073,7 @@ async function getLiveStatus(env) {
     JOIN employees e ON e.employee_id = pm.employee_id
     JOIN gate_passes gp ON gp.pass_id = pm.pass_id
     WHERE gp.status IN ('APPROVED', 'IN_PROGRESS')
-      AND pm.member_status NOT IN ('RETURNED', 'CANCELLED')
+      AND pm.member_status NOT IN ('RETURNED', 'CANCELLED', 'LEFT_FOR_DAY')
   `).all();
 
   const now = Date.now();
@@ -791,6 +1098,57 @@ async function getLiveStatus(env) {
   };
 }
 
+// Super Admin "clean slate" tool for the dashboard: forcibly resolves every
+// pass stuck in an unfinished state instead of requiring someone to hunt
+// down and manually close each one.
+//  - PENDING passes (never approved) are marked REJECTED.
+//  - APPROVED / IN_PROGRESS passes have every unresolved member forced to
+//    CANCELLED and the pass itself marked COMPLETED, dropping it off the
+//    live status dashboard. "Unresolved" here uses the same
+//    TERMINAL_MEMBER_STATUSES list movements.js already uses, so an
+//    Early Leave member sitting at LEFT_FOR_DAY is correctly left alone.
+// COMPLETED and REJECTED passes are already resolved and untouched.
+async function resetIncompletePasses(env, user, request) {
+  const { results: activePasses } = await env.DB.prepare(
+    `SELECT pass_id, status FROM gate_passes WHERE status IN ('PENDING', 'APPROVED', 'IN_PROGRESS')`
+  ).all();
+
+  let rejectedPending = 0;
+  let closedInProgress = 0;
+  let clearedMembers = 0;
+
+  for (const p of activePasses) {
+    if (p.status === "PENDING") {
+      await env.DB.prepare(
+        `UPDATE gate_passes SET status = 'REJECTED', updated_at = datetime('now') WHERE pass_id = ?`
+      ).bind(p.pass_id).run();
+      rejectedPending++;
+      continue;
+    }
+
+    const upd = await env.DB.prepare(
+      `UPDATE pass_members SET member_status = 'CANCELLED'
+       WHERE pass_id = ? AND member_status NOT IN ('RETURNED', 'CANCELLED', 'LEFT_FOR_DAY')`
+    ).bind(p.pass_id).run();
+    clearedMembers += upd.meta?.changes || 0;
+
+    await env.DB.prepare(
+      `UPDATE gate_passes SET status = 'COMPLETED', updated_at = datetime('now') WHERE pass_id = ?`
+    ).bind(p.pass_id).run();
+    closedInProgress++;
+  }
+
+  await writeAudit(env, {
+    userId: user.userId,
+    action: "SUPER_ADMIN_RESET_DASHBOARD",
+    recordType: "gate_pass",
+    details: { rejectedPending, closedInProgress, clearedMembers },
+    request,
+  });
+
+  return { rejected_pending: rejectedPending, closed_in_progress: closedInProgress, cleared_members: clearedMembers };
+}
+
 
 /* ---- from users.js ---- */
 // worker/src/users.js
@@ -799,8 +1157,10 @@ const VALID_ROLES = ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE", "SECURITY", "MAN
 
 async function listUsers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT u.user_id, u.username, u.role, u.status, u.employee_id, e.full_name AS employee_name, u.last_login_at, u.created_at
-     FROM users u LEFT JOIN employees e ON e.employee_id = u.employee_id
+    `SELECT u.user_id, u.username, u.role, u.status, u.employee_id, e.full_name AS employee_name, d.department_name, u.last_login_at, u.created_at
+     FROM users u
+     LEFT JOIN employees e ON e.employee_id = u.employee_id
+     LEFT JOIN departments d ON d.department_id = e.department_id
      ORDER BY u.username`
   ).all();
   return results;
@@ -918,6 +1278,65 @@ async function setUserStatus(env, actingUser, userId, status, request) {
   });
 
   return { user_id: Number(userId), status };
+}
+
+// Hard delete, unlike setUserStatus (soft, reversible). Only makes sense for
+// an account that hasn't actually done anything in the system yet - e.g. a
+// freshly-created login that turned out wrong and needs to be recreated -
+// since users.user_id is referenced by gate_passes.created_by,
+// movement_events.recorded_by and approvals.approver_id (all NOT NULL FKs).
+// If the account has any of that history, this refuses rather than either
+// failing on the FK constraint or silently orphaning the audit trail; the
+// caller should use setUserStatus('INACTIVE') instead to preserve history.
+async function deleteUser(env, actingUser, userId, request) {
+  const target = await env.DB.prepare(`SELECT user_id, username, role FROM users WHERE user_id = ?`).bind(userId).first();
+  if (!target) {
+    const err = new Error("User not found");
+    err.status = 404;
+    throw err;
+  }
+  if (Number(userId) === actingUser.userId) {
+    const err = new Error("You cannot delete your own account");
+    err.status = 400;
+    throw err;
+  }
+  // Only a SUPER_ADMIN can delete another SUPER_ADMIN (mirrors createUser).
+  if (target.role === "SUPER_ADMIN" && actingUser.role !== "SUPER_ADMIN") {
+    const err = new Error("Only a Super Admin can delete another Super Admin");
+    err.status = 403;
+    throw err;
+  }
+
+  const [passCount, movementCount, approvalCount] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM gate_passes WHERE created_by = ?`).bind(userId).first(),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM movement_events WHERE recorded_by = ?`).bind(userId).first(),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM approvals WHERE approver_id = ?`).bind(userId).first(),
+  ]);
+  const usageParts = [];
+  if (passCount.c > 0) usageParts.push(`created ${passCount.c} gate pass(es)`);
+  if (movementCount.c > 0) usageParts.push(`recorded ${movementCount.c} movement event(s)`);
+  if (approvalCount.c > 0) usageParts.push(`made ${approvalCount.c} approval decision(s)`);
+  if (usageParts.length > 0) {
+    const err = new Error(`Cannot delete '${target.username}': this account has ${usageParts.join(", ")} and is part of the audit trail. Deactivate it instead.`);
+    err.status = 409;
+    throw err;
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId),
+  ]);
+
+  await writeAudit(env, {
+    userId: actingUser.userId,
+    action: "ADMIN_DELETED_USER",
+    recordType: "user",
+    recordId: userId,
+    details: { username: target.username, role: target.role },
+    request,
+  });
+
+  return { deleted: true, user_id: Number(userId) };
 }
 
 
@@ -1058,6 +1477,33 @@ const __worker_export__ = {
         const { rows } = await request.json(); // pre-parsed on the frontend (PapaParse / SheetJS)
         return json(await importEmployees(env, user, rows, request));
       }
+      const employeeDeptMatch = path.match(/^\/api\/employees\/(\d+)\/department$/);
+      if (employeeDeptMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { department_id } = await request.json();
+        return json(await setEmployeeDepartment(env, user, employeeDeptMatch[1], department_id, request));
+      }
+
+      // ---------- DEPARTMENTS ----------
+      if (path === "/api/departments" && request.method === "GET") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
+        return json(await listDepartments(env));
+      }
+      if (path === "/api/departments" && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await createDepartment(env, user, await request.json(), request));
+      }
+      const departmentMatch = path.match(/^\/api\/departments\/(\d+)$/);
+      if (departmentMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await updateDepartment(env, user, departmentMatch[1], await request.json(), request));
+      }
+      const departmentStatusMatch = path.match(/^\/api\/departments\/(\d+)\/status$/);
+      if (departmentStatusMatch && request.method === "PUT") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        const { status } = await request.json();
+        return json(await setDepartmentStatus(env, user, departmentStatusMatch[1], status, request));
+      }
 
       // ---------- LOCATIONS ----------
       if (path === "/api/locations" && request.method === "GET") {
@@ -1094,11 +1540,15 @@ const __worker_export__ = {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER", "EMPLOYEE"]);
         return json(await getGatePassDetails(env, passDetailMatch[1]));
       }
+      if (passDetailMatch && request.method === "DELETE") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "EMPLOYEE"]);
+        return json(await deleteGatePass(env, user, passDetailMatch[1], request));
+      }
 
       // ---------- APPROVALS ----------
       if (path === "/api/approvals/pending" && request.method === "GET") {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD"]);
-        return json(await listPendingApprovals(env));
+        return json(await listPendingApprovals(env, user));
       }
       const decideMatch = path.match(/^\/api\/gatepasses\/(\d+)\/decision$/);
       if (decideMatch && request.method === "POST") {
@@ -1116,6 +1566,10 @@ const __worker_export__ = {
         requireRole(user, ["SUPER_ADMIN", "ADMIN", "HOD", "SECURITY", "MANAGEMENT_VIEWER"]);
         return json(await getLiveStatus(env));
       }
+      if (path === "/api/movements/reset" && request.method === "POST") {
+        requireRole(user, ["SUPER_ADMIN"]);
+        return json(await resetIncompletePasses(env, user, request));
+      }
 
       // ---------- USER MANAGEMENT ----------
       if (path === "/api/users" && request.method === "GET") {
@@ -1131,6 +1585,11 @@ const __worker_export__ = {
         requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
         const { status } = await request.json();
         return json(await setUserStatus(env, user, userStatusMatch[1], status, request));
+      }
+      const userDeleteMatch = path.match(/^\/api\/users\/(\d+)$/);
+      if (userDeleteMatch && request.method === "DELETE") {
+        requireRole(user, ["SUPER_ADMIN", "ADMIN"]);
+        return json(await deleteUser(env, user, userDeleteMatch[1], request));
       }
       const userPasswordMatch = path.match(/^\/api\/users\/(\d+)\/password$/);
       if (userPasswordMatch && request.method === "PUT") {
