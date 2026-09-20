@@ -11,10 +11,14 @@
 // or worker badge - via the same GET /api/qr/:token the old screens each
 // called separately, and fills in whichever field it matches.
 //
-// Two shortcuts on top of that:
-//  - If scanning/selecting the pass leaves exactly one person eligible for
-//    the chosen event, that person is auto-selected - no separate badge scan
-//    needed on a single-member pass (the common case).
+// Shortcuts on top of that:
+//  - Single-member pass: scanning/selecting the pass leaves exactly one
+//    person eligible, so they're auto-selected - no separate badge scan.
+//  - Multi-member (GROUP) pass: rather than scan/select each member one at a
+//    time, the form defaults to "whole group" mode - one submit records the
+//    event for every eligible member on the pass at once. Unchecking that
+//    switches back to picking a single person, for when only one member of
+//    the group needs to be recorded separately.
 //  - If the logged-in Security account has a default_location_id set (see
 //    User Management > Set Default Location), that location is sent along
 //    automatically with gate events, which otherwise carry no location_id.
@@ -30,12 +34,12 @@ const MOVEMENT_EVENT_DEFS = [
 ];
 
 // Only members who are actually in a valid starting state for the chosen
-// event show up in the picker. This is what stops someone being gated out
-// (or gated in) a second time from this screen: once they're OUTSIDE, they
-// simply won't appear in the GATE_OUT list any more. Non-gate events are
-// only filtered down to "not already terminal" - the exact state machine
-// for location/external/return is looser and the backend is the real guard
-// there.
+// event show up in the picker / group batch. This is what stops someone
+// being gated out (or gated in) a second time from this screen: once
+// they're OUTSIDE, they simply won't appear in the GATE_OUT list any more.
+// Non-gate events are only filtered down to "not already terminal" - the
+// exact state machine for location/external/return is looser and the
+// backend is the real guard there.
 function eligibleMembersFor(eventType, members) {
   const TERMINAL = ["RETURNED", "CANCELLED", "LEFT_FOR_DAY"];
   if (eventType === "GATE_OUT") {
@@ -63,12 +67,17 @@ async function renderMovementCheck(container) {
   const activeLocations = allLocations.filter((l) => l.status === "ACTIVE");
   const defaultLocation = activeLocations.find((l) => String(l.location_id) === String(defaultLocationId)) || null;
 
+  // Tracks who's actually eligible for the currently-selected pass + event,
+  // so the submit handler knows exactly who "whole group" means without
+  // re-deriving it (and without a stale DOM read).
+  let currentEligibleMembers = [];
+
   container.innerHTML = `
     <h2>Record Movement</h2>
     <p class="hint-text">
       ${isEmployee
         ? "Check yourself in or out of a location on one of your approved passes."
-        : "Scan or select a pass - if only one person on it is eligible for the chosen event, they're picked automatically."}
+        : "Scan or select a pass - a single eligible person is picked automatically, and a group pass defaults to recording everyone eligible at once."}
     </p>
 
     <div class="assisted-scan-row">
@@ -91,11 +100,20 @@ async function renderMovementCheck(container) {
       <input type="hidden" name="event_type" id="movement-event-hidden" value="${eventDefs[0] ? eventDefs[0].value : ""}" />
 
       ${isEmployee ? "" : `
-        <label>Employee <span class="hint-text">(auto-selected when only one person on the pass is eligible)</span>
-          <select name="employee_id" id="movement-employee-select" required>
-            <option value="">-- scan badge or select --</option>
-          </select>
-        </label>
+        <div id="movement-group-toggle" style="display:none;">
+          <label style="flex-direction: row; align-items: center; gap: 0.5rem;">
+            <input type="checkbox" id="movement-apply-group" style="width:auto;" checked />
+            Record for the whole group (<span id="movement-group-count">0</span> people eligible) - no per-person scan needed
+          </label>
+        </div>
+
+        <div id="movement-employee-field">
+          <label>Employee <span class="hint-text">(scan their badge, or select)</span>
+            <select name="employee_id" id="movement-employee-select">
+              <option value="">-- scan badge or select --</option>
+            </select>
+          </label>
+        </div>
       `}
 
       <div id="movement-location-field">
@@ -116,13 +134,30 @@ async function renderMovementCheck(container) {
   const eventButtons = document.querySelectorAll("#movement-event-buttons .choice-btn");
   const eventHidden = document.getElementById("movement-event-hidden");
   const employeeSelect = document.getElementById("movement-employee-select"); // null for EMPLOYEE role
+  const employeeField = document.getElementById("movement-employee-field"); // null for EMPLOYEE role
+  const groupToggleWrap = document.getElementById("movement-group-toggle"); // null for EMPLOYEE role
+  const groupCheckbox = document.getElementById("movement-apply-group"); // null for EMPLOYEE role
+  const groupCountEl = document.getElementById("movement-group-count"); // null for EMPLOYEE role
   const locationField = document.getElementById("movement-location-field");
   const gateLocationHint = document.getElementById("gate-location-hint");
   const errorEl = document.getElementById("movement-error");
   const scanLabel = document.getElementById("movement-scan-label");
+  const submitBtn = document.querySelector("#movement-form button[type=submit]");
 
   function currentEventDef() {
     return eventDefs.find((e) => e.value === eventHidden.value);
+  }
+
+  // Shows/hides the individual employee picker depending on whether "whole
+  // group" mode is on, and keeps the submit button's label honest about
+  // what pressing it will actually do.
+  function applyGroupVisibility() {
+    if (isEmployee) return;
+    const groupActive = currentEligibleMembers.length > 1 && groupCheckbox.checked;
+    if (employeeField) employeeField.style.display = groupActive ? "none" : "";
+    submitBtn.textContent = groupActive
+      ? `Record for All ${currentEligibleMembers.length}`
+      : "Record Movement";
   }
 
   // Gate events don't take a manually-picked location (the gate isn't one of
@@ -146,30 +181,48 @@ async function renderMovementCheck(container) {
   });
   applyEventVisibility();
 
+  if (groupCheckbox) {
+    groupCheckbox.addEventListener("change", applyGroupVisibility);
+  }
+
   async function loadPassMembers() {
     if (isEmployee || !employeeSelect) return; // self only - no picker to populate
     if (!passSelect.value) {
       employeeSelect.innerHTML = `<option value="">-- scan badge or select --</option>`;
+      currentEligibleMembers = [];
+      groupToggleWrap.style.display = "none";
+      applyGroupVisibility();
       return;
     }
     const { pass, members } = await Api.getGatePass(passSelect.value);
     const eligible = eligibleMembersFor(eventHidden.value, members);
+    currentEligibleMembers = eligible;
 
     if (eligible.length === 0) {
       employeeSelect.innerHTML = `<option value="">-- no one eligible for this event --</option>`;
+      groupToggleWrap.style.display = "none";
+      applyGroupVisibility();
       return;
     }
 
     employeeSelect.innerHTML = `<option value="">-- scan badge or select --</option>` +
       eligible.map((m) => `<option value="${m.employee_id}">${m.emp_code} - ${m.full_name} (${formatMemberStatus(pass.status, m.member_status)})</option>`).join("");
 
-    // Scanning/selecting the pass already identifies the one person it can
-    // possibly be when there's only one eligible member on it - no need to
-    // also scan or pick their badge separately.
     if (eligible.length === 1) {
+      // Scanning/selecting the pass already identifies the one person it can
+      // possibly be - no need to also scan or pick their badge separately.
       employeeSelect.value = eligible[0].employee_id;
       scanLabel.textContent = `✓ ${eligible[0].emp_code} - ${eligible[0].full_name} (auto-selected)`;
+      groupToggleWrap.style.display = "none";
+    } else {
+      // GROUP pass with more than one person still eligible for this event -
+      // default to recording all of them in one go instead of making
+      // Security scan/select each member individually.
+      groupToggleWrap.style.display = "";
+      groupCountEl.textContent = eligible.length;
+      groupCheckbox.checked = true;
     }
+    applyGroupVisibility();
   }
   passSelect.addEventListener("change", loadPassMembers);
 
@@ -211,6 +264,10 @@ async function renderMovementCheck(container) {
             errorEl.textContent = `${resolved.employee.full_name} is not eligible for this event on this pass (already recorded, or not a member).`;
             return;
           }
+          // Scanning a specific person's badge means "just this one" - drop
+          // out of whole-group mode so the form does exactly that.
+          if (groupCheckbox) groupCheckbox.checked = false;
+          applyGroupVisibility();
           employeeSelect.value = resolved.employee.employee_id;
           scanLabel.textContent = `✓ ${resolved.employee.emp_code} - ${resolved.employee.full_name}`;
         }
@@ -223,18 +280,16 @@ async function renderMovementCheck(container) {
   document.getElementById("movement-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const btn = event.target.querySelector("button[type=submit]");
-    btn.disabled = true;
-    btn.textContent = "SUBMITTING...";
+    const originalLabel = btn.textContent;
     errorEl.textContent = "";
 
     const form = new FormData(event.target);
     const eventType = form.get("event_type");
     const def = eventDefs.find((e) => e.value === eventType);
+    const passId = Number(form.get("pass_id"));
 
-    if (!isEmployee && !form.get("employee_id")) {
-      errorEl.textContent = "There's no one left on this pass eligible for this event.";
-      btn.disabled = false;
-      btn.textContent = "Record Movement";
+    if (!passId) {
+      errorEl.textContent = "Select or scan a pass first.";
       return;
     }
 
@@ -245,9 +300,54 @@ async function renderMovementCheck(container) {
       ? (defaultLocationId || undefined)
       : (Number(form.get("location_id")) || undefined);
 
+    const groupActive = !isEmployee && groupCheckbox && currentEligibleMembers.length > 1 && groupCheckbox.checked;
+
+    if (groupActive) {
+      if (currentEligibleMembers.length === 0) {
+        errorEl.textContent = "There's no one left on this pass eligible for this event.";
+        return;
+      }
+      btn.disabled = true;
+      const results = [];
+      for (const member of currentEligibleMembers) {
+        btn.textContent = `Recording ${results.length + 1}/${currentEligibleMembers.length}...`;
+        try {
+          await Api.recordMovement({
+            pass_id: passId,
+            employee_id: member.employee_id,
+            location_id: locationId,
+            event_type: eventType,
+            idempotency_key: window.newIdempotencyKey(),
+          });
+          results.push({ ok: true, name: member.full_name });
+        } catch (err) {
+          results.push({ ok: false, name: member.full_name, error: err.message });
+        }
+      }
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length === 0) {
+        btn.textContent = `Recorded for all ${results.length}`;
+        setTimeout(() => renderMovementCheck(container), 1200);
+      } else {
+        errorEl.textContent = `Recorded ${results.length - failed.length}/${results.length}. Failed: ${failed.map((f) => `${f.name} (${f.error})`).join("; ")}`;
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
+      return;
+    }
+
+    // Single-person path: EMPLOYEE self-service, or Security/Admin with
+    // group mode off (or only one person eligible in the first place).
+    if (!isEmployee && !form.get("employee_id")) {
+      errorEl.textContent = "There's no one left on this pass eligible for this event.";
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "SUBMITTING...";
     try {
       await Api.recordMovement({
-        pass_id: Number(form.get("pass_id")),
+        pass_id: passId,
         employee_id: isEmployee ? window.CurrentUser.employeeId : Number(form.get("employee_id")),
         location_id: locationId,
         event_type: eventType,
@@ -258,7 +358,7 @@ async function renderMovementCheck(container) {
     } catch (err) {
       errorEl.textContent = err.message;
       btn.disabled = false;
-      btn.textContent = "Record Movement";
+      btn.textContent = originalLabel;
     }
   });
 }
