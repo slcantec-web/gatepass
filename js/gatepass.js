@@ -2,6 +2,11 @@
 
 async function renderCreatePass(container) {
   const [employees, locations] = await Promise.all([Api.listEmployees(), Api.listLocations()]);
+  // Deleted (INACTIVE) locations should never be pickable for a new pass -
+  // they're already hidden everywhere else (movement check, etc.) but this
+  // screen was missing the same filter.
+  const activeLocations = locations.filter((l) => l.status === "ACTIVE");
+
   container.innerHTML = `
     <h2>Create Movement Pass</h2>
     <form id="create-pass-form" class="stacked-form">
@@ -19,7 +24,7 @@ async function renderCreatePass(container) {
       <input type="hidden" name="pass_category" id="pass-category-hidden" value="MOVEMENT" />
       <label>From Location
         <select name="from_location_id" required>
-          ${locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
+          ${activeLocations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
         </select>
       </label>
       <label>Leader (Employee)
@@ -35,7 +40,7 @@ async function renderCreatePass(container) {
       <div id="route-fields">
         <label>Destination(s) / Route <span class="hint-text">(type to search - pick in the order you'll visit them)</span>
           <select name="route_location_ids" id="route-select" multiple>
-            ${locations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
+            ${activeLocations.map((l) => `<option value="${l.location_id}">${l.location_name} (${l.location_type})</option>`).join("")}
           </select>
         </label>
         <label>Other destination <span class="hint-text">(only if the actual place isn't listed above - e.g. a one-off customer/vendor site, or still to be decided)</span>
@@ -246,6 +251,11 @@ async function renderPassDetails(container, passId) {
   ]);
   const printEnabled = settings.print_enabled !== "false";
   const isRejected = pass.status === "REJECTED";
+  // QR / print only make sense once a pass is actually usable at the gate -
+  // a PENDING pass hasn't been through HOD approval yet and could still be
+  // rejected outright, so showing/printing its QR this early would let
+  // someone walk out on a pass that was never actually cleared.
+  const canShowQr = ["APPROVED", "IN_PROGRESS", "COMPLETED"].includes(pass.status);
 
   const currentEmployeeId = window.CurrentUser && window.CurrentUser.employeeId;
   const isSuperAdmin = window.CurrentUser && window.CurrentUser.role === "SUPER_ADMIN";
@@ -257,10 +267,15 @@ async function renderPassDetails(container, passId) {
     <h2>${pass.pass_number} <span class="badge">${pass.status}</span>${pass.pass_category === "EARLY_LEAVE" ? ` <span class="badge" style="background: var(--warning-light); color: var(--warning);">EARLY LEAVE - NO RETURN</span>` : ""}</h2>
     <p>${pass.purpose}</p>
     ${pass.destination_note ? `<p class="hint-text"><strong>Other destination:</strong> ${pass.destination_note}</p>` : ""}
-    ${isRejected ? `<p class="error-text">This pass was rejected - its QR code and print slip are no longer available.</p>` : `
-      <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
-      ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
-    `}
+    ${isRejected
+      ? `<p class="error-text">This pass was rejected - its QR code and print slip are no longer available.</p>`
+      : canShowQr
+        ? `
+          <button id="show-pass-qr" class="btn-secondary">Show QR Code</button>
+          ${printEnabled ? `<button id="print-pass-slip" class="btn-secondary">Print Pass Slip</button>` : ""}
+        `
+        : `<p class="hint-text">This pass is awaiting HOD approval - its QR code and print slip will be available once it's approved.</p>`
+    }
     ${canDelete ? `<button id="delete-pass-btn" class="btn-secondary" style="color: var(--danger); border-color: var(--danger);">Delete Gate Pass</button>` : ""}
     <h3>Members</h3>
     <table class="data-table">
@@ -276,7 +291,7 @@ async function renderPassDetails(container, passId) {
     </table>
   `;
 
-  if (!isRejected) {
+  if (canShowQr) {
     document.getElementById("show-pass-qr").addEventListener("click", () => {
       renderQrModal(`Pass ${pass.pass_number}`, pass.qr_code_token);
     });
